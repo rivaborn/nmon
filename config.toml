@@ -1,0 +1,12 @@
+[sampling]
+interval_seconds = 2
+min_interval = 1
+max_interval = 60
+
+[storage]
+db_path = "nmon.db"
+retention_hours = 24
+
+[display]
+default_tab = "dashboard"
+default_time_window_hours = 1

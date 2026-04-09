@@ -1,0 +1,14 @@
+# Aider
+.aider*
+
+# Runtime / debug
+nmon.db
+nmon_debug.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
