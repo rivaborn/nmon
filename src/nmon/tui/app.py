@@ -24,7 +24,6 @@ class NmonApp:
         self._quit = False
         self._lock = threading.Lock()
         self._redraw = threading.Event()
-        self._last_key = "none"   # debug: last raw key received
 
     def run(self) -> None:
         self._collector.start()
@@ -63,7 +62,7 @@ class NmonApp:
             for t in TABS
         )
         layout["header"].update(
-            Text.from_markup(f" nmon  {tabs_str}   key={self._last_key} tab={self._tab}", style="bold")
+            Text.from_markup(f" nmon  {tabs_str}", style="bold")
         )
         samples = self._collector.get_latest()
         if tab == "dashboard":
@@ -95,11 +94,6 @@ class NmonApp:
                 key = '\xe0' + ch2  # e.g. '\xe0K' = left arrow, '\xe0M' = right
             else:
                 key = ch
-
-            # Record for debug display and log file
-            self._last_key = repr(key)
-            with open("nmon_debug.log", "a") as f:
-                f.write(f"key={repr(key)}  tab={self._tab}\n")
 
             changed = True
             with self._lock:
