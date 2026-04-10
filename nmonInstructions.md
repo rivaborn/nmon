@@ -217,26 +217,41 @@ Expected output on a supported card looks like:
 
 ```
 NVAPI: found 1 GPU(s).
-NVAPI: client thermal sensors version tag = 0x000200a8 (size=168)
 
 GPU 0:
   documented sensors: count=1
-    [0] target=GPU            current=65°C range=[0,127]
-  client thermal sensors: mask=0x00000003
-    sensor[ 0] =   65.0°C   (raw 65000)
-    sensor[ 1] =   82.0°C   (raw 82000)   ← memory junction
+    [0] target=GPU            current=65C range=[0,127]
+  client thermal channels: mask=0x000000ff (Q8.8 fixed point, divide raw by 256)
+    sensor[ 0] =  65.03C  (raw 16648)  <-- matches GPU core
+    sensor[ 1] =  71.19C  (raw 18224)  <-- core + +6.2C (likely memory/hotspot)
+    sensor[ 2] =  65.03C  (raw 16648)  <-- matches GPU core
+    sensor[ 3] =  65.06C  (raw 16656)  <-- matches GPU core
+    ...
 ```
 
 Interpretation guide:
 
 - **documented sensors** — always works; shows at least GPU core temp.
   If this block is empty, NVAPI isn't reachable at all (check driver).
-- **client thermal sensors** — the undocumented path we use for junction.
-  If this reports "call failed", either your card doesn't expose memory
-  temp or the struct layout doesn't match your driver.
-- If populated but the memory sensor is at a different index than `[1]`,
-  the `_SENSOR_INDEX_MEMORY` constant in `src/nmon/gpu/nvapi.py` needs to
-  be updated for your card.
+- **client thermal channels** — the undocumented path we use for junction
+  temperature. Each row is auto-labeled: channels that match GPU core are
+  redundant core probes; channels several degrees above core are the
+  interesting ones (memory junction, hotspot, VRM).
+- nmon currently reads channel index `1` as the memory junction. Most
+  Ampere / Ada consumer cards put memory junction at index 1, but if
+  your diagnostic shows a clearly hotter channel at a different index,
+  edit `_SENSOR_INDEX_MEMORY` in `src/nmon/gpu/nvapi.py` to match.
+- If `client thermal channels: call failed for all masks` appears, the
+  function either isn't exposed on this card or the driver expects a
+  different struct layout. Re-run the diagnostic with
+  `python -m nmon.gpu.nvapi` after a driver update, or report the
+  exact driver version so nmon's struct layout can be adjusted.
+
+**Technical note:** nmon calls the undocumented NVAPI function
+`NvAPI_GPU_ThermChannelGetStatus` (id `0x65FE3AAD`) with a 168-byte v2
+request (`version = 0x000200a8`) and `mask = 0xFF`. Temperatures come
+back in Q8.8 fixed point — nmon divides raw values by 256 to convert
+to degrees Celsius.
 
 Other checks:
 

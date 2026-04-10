@@ -187,6 +187,17 @@ def _enum_gpus() -> bool:
     return True
 
 
+# Sensor-channel masks to try, widest first. 0xFF covers the 8 channels
+# observed on Ampere consumer cards; we fall back to narrower masks if
+# the driver rejects it.
+_SENSOR_MASKS = (0xFF, 0x1F, 0x0F, 0x03, 0x01)
+
+# Temperatures are reported in Q8.8 fixed point: upper 8 bits are whole
+# degrees C, lower 8 bits are fractional. Verified by cross-referencing
+# against the documented NvAPI_GPU_GetThermalSettings GPU core temp.
+_TEMP_DIVISOR = 256.0
+
+
 def _read_thermal_sensors(gpu_index: int):
     """Read the raw thermal sensors struct for a GPU. Returns the struct
     or None if the call path fails at any stage."""
@@ -205,26 +216,28 @@ def _read_thermal_sensors(gpu_index: int):
     fn = _resolve(_NVAPI_GPU_CLIENT_THERMAL_SENSORS_GET_VALUES, proto)
     if fn is None:
         return None
-    data = _NvGpuClientThermalSensors()
-    data.version = _V2_VERSION
-    data.mask = 0xFFFFFFFF
-    try:
-        status = fn(handles[gpu_index], ctypes.byref(data))
-    except OSError as e:
-        log.debug("NVAPI: thermal sensors call raised: %s", e)
-        return None
-    if status != _NVAPI_OK:
-        log.debug("NVAPI: thermal sensors call returned %d", status)
-        return None
-    return data
+    for mask in _SENSOR_MASKS:
+        data = _NvGpuClientThermalSensors()
+        data.version = _V2_VERSION
+        data.mask = mask
+        try:
+            status = fn(handles[gpu_index], ctypes.byref(data))
+        except OSError as e:
+            log.debug("NVAPI: thermal sensors call raised: %s", e)
+            return None
+        if status == _NVAPI_OK:
+            return data
+        log.debug("NVAPI: mask=0x%x returned %d", mask, status)
+    return None
 
 
 def read_memory_junction_temp(gpu_index: int) -> float | None:
     """Read GDDR6/6X memory junction temperature via NVAPI.
 
-    Returns the temperature in °C, or None if NVAPI is unavailable, the
-    GPU doesn't expose the sensor, or the call fails. Unsupported GPUs
-    are cached so we don't keep paying for the round trip every sample.
+    Returns the temperature in degrees C, or None if NVAPI is
+    unavailable, the GPU doesn't expose the sensor, or the call fails.
+    Unsupported GPUs are cached so we don't keep paying for the round
+    trip every sample.
     """
     with _lock:
         if gpu_index in _state["unsupported_gpus"]:
@@ -240,13 +253,48 @@ def read_memory_junction_temp(gpu_index: int) -> float | None:
         if raw <= 0:
             _state["unsupported_gpus"].add(gpu_index)
             return None
-        return raw / 1000.0
+        return raw / _TEMP_DIVISOR
 
 
-def _probe_documented_thermal_settings(gpu_index: int) -> None:
+def _probe_and_label_channels(gpu_index: int, core_temp: int | None) -> None:
+    """Read the undocumented thermal channels the production way
+    (v2/168B struct, mask=0xFF) and label each populated channel by
+    comparing its value against the documented GPU core temp."""
+    data = _read_thermal_sensors(gpu_index)
+    if data is None:
+        print("  client thermal channels: call failed for all masks")
+        return
+    print(f"  client thermal channels: mask=0x{data.mask:08x}"
+          f" (Q8.8 fixed point, divide raw by 256)")
+    any_sensor = False
+    for j in range(32):
+        raw = data.temperatures[j]
+        if raw == 0:
+            continue
+        any_sensor = True
+        temp = raw / _TEMP_DIVISOR
+        label = ""
+        if core_temp is not None:
+            diff = temp - core_temp
+            if abs(diff) <= 2:
+                label = "  <-- matches GPU core"
+            elif diff > 2:
+                label = f"  <-- core + {diff:+.1f}C (likely memory/hotspot)"
+            else:
+                label = f"  <-- core {diff:+.1f}C"
+        print(f"    sensor[{j:2d}] = {temp:6.2f}C  (raw {raw}){label}")
+    if not any_sensor:
+        print("    (no populated sensors)")
+    print()
+    print("  To wire a different sensor index into nmon, edit")
+    print("  _SENSOR_INDEX_MEMORY in src/nmon/gpu/nvapi.py.")
+
+
+def _probe_documented_thermal_settings(gpu_index: int) -> int | None:
     """Call the documented NvAPI_GPU_GetThermalSettings and print all
-    sensors it reports. This confirms NVAPI is talking to the driver
-    even when the undocumented client-sensors path fails."""
+    sensors it reports. Returns the GPU core temperature (whole degrees
+    C) if the call succeeds, so the caller can cross-reference it
+    against the undocumented client thermal channels."""
     proto = ctypes.CFUNCTYPE(
         ctypes.c_int32,
         ctypes.c_void_p,
@@ -256,21 +304,25 @@ def _probe_documented_thermal_settings(gpu_index: int) -> None:
     fn = _resolve(_NVAPI_GPU_GET_THERMAL_SETTINGS, proto)
     if fn is None:
         print("  documented NvAPI_GPU_GetThermalSettings: not resolvable")
-        return
+        return None
     data = _NvGpuThermalSettings()
     data.version = _THERMAL_SETTINGS_VERSION
     handle = _state["gpu_handles"][gpu_index]
     status = fn(handle, _THERMAL_TARGET_ALL, ctypes.byref(data))
     if status != _NVAPI_OK:
         print(f"  documented NvAPI_GPU_GetThermalSettings: returned {status}")
-        return
+        return None
     print(f"  documented sensors: count={data.count}")
+    gpu_core_temp = None
     for j in range(min(data.count, _NVAPI_MAX_THERMAL_SENSORS_PER_GPU)):
         s = data.sensor[j]
         target_name = _THERMAL_TARGET_NAMES.get(s.target, f"?({s.target})")
         print(f"    [{j}] target={target_name:14s}"
-              f" current={s.currentTemp}°C"
+              f" current={s.currentTemp}C"
               f" range=[{s.defaultMinTemp},{s.defaultMaxTemp}]")
+        if s.target == 1 and gpu_core_temp is None:  # NVAPI_THERMAL_TARGET_GPU
+            gpu_core_temp = s.currentTemp
+    return gpu_core_temp
 
 
 def diagnostic() -> None:
@@ -298,24 +350,8 @@ def diagnostic() -> None:
               f" (size={_THERMAL_SETTINGS_SIZE})")
         for i in range(len(handles)):
             print(f"\nGPU {i}:")
-            # Documented path first — this should always work and gives us
-            # a sanity check that NVAPI is reachable.
-            _probe_documented_thermal_settings(i)
-            # Undocumented client thermal sensors path (what we use for
-            # memory junction temp on GDDR6X cards).
-            data = _read_thermal_sensors(i)
-            if data is None:
-                print("  client thermal sensors: call failed")
-                continue
-            print(f"  client thermal sensors: mask=0x{data.mask:08x}")
-            any_sensor = False
-            for j in range(32):
-                t = data.temperatures[j]
-                if t != 0:
-                    print(f"    sensor[{j:2d}] = {t/1000:6.1f}°C   (raw {t})")
-                    any_sensor = True
-            if not any_sensor:
-                print("    (no populated sensors — struct version may be wrong)")
+            core_temp = _probe_documented_thermal_settings(i)
+            _probe_and_label_channels(i, core_temp)
 
 
 if __name__ == "__main__":
