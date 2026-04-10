@@ -6,6 +6,21 @@ from nmon.models import GPUInfo, GPUSample
 class NvmlSource(GPUSource):
     def __init__(self):
         self._initialized = False
+        self._junction_unsupported: set[int] = set()
+
+    def _read_junction_temp(self, index: int, handle) -> float | None:
+        if index in self._junction_unsupported:
+            return None
+        try:
+            values = pynvml.nvmlDeviceGetFieldValues(
+                handle, [pynvml.NVML_FI_DEV_MEMORY_TEMP]
+            )
+            if values and values[0].nvmlReturn == 0:
+                return float(values[0].value.siVal)
+        except Exception:
+            pass
+        self._junction_unsupported.add(index)
+        return None
 
     def is_available(self) -> bool:
         try:
@@ -41,6 +56,7 @@ class NvmlSource(GPUSource):
                 mem_used = mem.used / (1024 * 1024)
                 mem_total = mem.total / (1024 * 1024)
                 power = pynvml.nvmlDeviceGetPowerUsage(handle) / 1000.0
+                junction = self._read_junction_temp(i, handle)
                 samples.append(GPUSample(
                     gpu=GPUInfo(index=i, uuid=uuid, name=name),
                     timestamp=ts,
@@ -48,6 +64,7 @@ class NvmlSource(GPUSource):
                     memory_used_mib=mem_used,
                     memory_total_mib=mem_total,
                     power_draw_w=power,
+                    memory_junction_temp_c=junction,
                 ))
             return samples
         except pynvml.NVMLError as e:

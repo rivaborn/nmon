@@ -23,8 +23,13 @@
 - Python 3.10 or later
 - Nvidia GPU with drivers installed
 - Either:
-  - `pynvml` Python package (recommended), **or**
+  - `nvidia-ml-py` Python package (recommended), **or**
   - `nvidia-smi` executable on your PATH
+
+GPU Memory Junction Temperature is read through NVML's field-value API and is
+only available on GPUs whose driver/firmware exposes it (typically data-center
+and higher-end consumer cards with HBM or GDDR6X). On unsupported cards the
+feature is silently skipped — the core temperature still works.
 
 ### Installing nmon
 
@@ -128,6 +133,30 @@ default_time_window_hours = 1
 | 3 | Power | Power draw history chart |
 | 4 | Memory | Memory usage history chart |
 
+### Dashboard Layout
+
+The Dashboard tab shows two sections:
+
+1. **GPU Status** — current temperature, Max 24h, Avg 1h, memory usage, and
+   power draw for every detected GPU.
+2. **GPU Memory Junction Temperature** — a second table that appears below
+   whenever at least one GPU reports a memory junction (VRAM) temperature,
+   showing current, Max 24h, and Avg 1h for each supported GPU. Hidden when
+   no GPU supports it, or when the junction display is toggled off.
+
+### Temperature Tab Overlay
+
+On the Temp tab, for any GPU that supports it, the memory junction temperature
+is drawn on top of the core temperature line in a different color (bright red)
+so the two series can be compared at a glance. The panel footer notes
+`(junction in red)` when the overlay is active.
+
+### Chart Time Span
+
+History chart panels show the actual time span of collected data currently
+displayed, formatted as `Hh Mm Ss` (e.g. `collected: 0h 29m 0s`) alongside
+the time-window selector.
+
 ### Controls
 
 | Key | Action |
@@ -135,8 +164,9 @@ default_time_window_hours = 1
 | 1-4 | Switch tabs |
 | + | Increase sampling interval |
 | - | Decrease sampling interval |
-| [ | Decrease time window (history tabs) |
-| ] | Increase time window (history tabs) |
+| [ or ← | Decrease time window (history tabs) |
+| ] or → | Increase time window (history tabs) |
+| j | Toggle GPU Memory Junction Temperature on/off |
 | q | Quit the app |
 
 ---
@@ -161,8 +191,17 @@ The database will be recreated on the next run.
 ### No GPU Detected
 
 - Ensure Nvidia drivers are installed
-- Verify `nvidia-smi` is on your PATH or `pynvml` is installed
+- Verify `nvidia-smi` is on your PATH or `nvidia-ml-py` is installed
 - Check that the Nvidia driver service is running
+
+### Memory Junction Temperature Not Showing
+
+- The field-value API returns `NVML_ERROR_NOT_SUPPORTED` on GPUs whose driver
+  or firmware doesn't expose memory junction temperature. This is normal.
+- Press `j` to confirm the toggle is on — check the status bar for
+  `j: Junction (on)`.
+- nmon caches unsupported GPUs per run; restart nmon after a driver update
+  if you expect support to have been added.
 
 ### App Crashes on Start
 
@@ -192,14 +231,58 @@ coverage report -m
 
 ---
 
+## Rebuild and Redeploy
+
+Because nmon is installed as an editable package (`pip install -e .`), you
+usually don't need to rebuild anything after changing source files — just run
+`nmon` again and your edits are picked up automatically.
+
+### After editing source files
+
+```bash
+nmon
+```
+
+That's it. Schema changes to the SQLite database are applied on the next run
+via `ALTER TABLE` migrations, so the existing `nmon.db` is kept intact.
+
+### After editing `pyproject.toml` or adding/removing dependencies
+
+Re-run the editable install so new dependencies are fetched and entry points
+re-registered:
+
+```bash
+pip install -e .
+```
+
+### Resetting the database
+
+Only needed if you want to discard all recorded history:
+
+```bash
+del nmon.db          # Windows
+rm nmon.db           # macOS/Linux
+```
+
+The database is recreated automatically on the next run.
+
+---
+
 ## Building and Packaging
 
-To build a distribution package:
+To build a distribution package for installing on another machine:
+
 ```bash
+pip install build
 python -m build
 ```
 
-This creates `dist/nmon-*.tar.gz` and `dist/nmon-*-py3-none-any.whl`.
+This creates `dist/nmon-*.tar.gz` and `dist/nmon-*-py3-none-any.whl`. Install
+the wheel on the target machine with:
+
+```bash
+pip install dist/nmon-0.1.0-py3-none-any.whl
+```
 
 ---
 

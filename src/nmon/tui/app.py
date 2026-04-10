@@ -21,6 +21,7 @@ class NmonApp:
         self._config = config
         self._tab = config.default_tab
         self._time_window = config.default_time_window_hours
+        self._show_junction = True
         self._quit = False
         self._lock = threading.Lock()
         self._redraw = threading.Event()
@@ -57,6 +58,7 @@ class NmonApp:
         with self._lock:
             tab = self._tab
             window = self._time_window
+            show_junction = self._show_junction
         tabs_str = "  ".join(
             f"\\[{t.upper()}]" if t == tab else t.capitalize()
             for t in TABS
@@ -68,16 +70,23 @@ class NmonApp:
         if tab == "dashboard":
             if samples:
                 stats = self._build_gpu_stats(samples)
-                layout["body"].update(dashboard.build_dashboard(stats))
+                layout["body"].update(
+                    dashboard.build_dashboard(stats, show_junction=show_junction)
+                )
             else:
                 layout["body"].update(Panel("Waiting for data..."))
         else:
             gpu_list = [s.gpu for s in samples] if samples else []
             layout["body"].update(
-                history.build_history(self._storage, gpu_list, tab, window)
+                history.build_history(
+                    self._storage, gpu_list, tab, window,
+                    show_junction=show_junction,
+                )
             )
         interval = self._collector._interval
-        layout["footer"].update(StatusBar(interval, tab, len(self._collector.warnings)))
+        layout["footer"].update(
+            StatusBar(interval, tab, len(self._collector.warnings), show_junction)
+        )
         return layout
 
     def _handle_keys(self) -> None:
@@ -111,6 +120,8 @@ class NmonApp:
                     self._collector.set_interval(self._collector._interval + 1)
                 elif key == '-':
                     self._collector.set_interval(self._collector._interval - 1)
+                elif key in ('j', 'J'):
+                    self._show_junction = not self._show_junction
                 else:
                     changed = False
             if changed:
@@ -121,13 +132,16 @@ class NmonApp:
         for sample in samples:
             result = self._storage.get_current_stats(sample.gpu.index)
             if result:
-                max_temp, avg_temp = result
+                max_temp, avg_temp, jmax, javg = result
             else:
                 max_temp = avg_temp = sample.temperature_c
+                jmax = javg = sample.memory_junction_temp_c
             stats.append(GPUStats(
                 gpu=sample.gpu,
                 current=sample,
                 max_temp_24h=max_temp,
                 avg_temp_1h=avg_temp,
+                junction_max_24h=jmax,
+                junction_avg_1h=javg,
             ))
         return stats

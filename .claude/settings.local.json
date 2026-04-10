@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import pynvml; print\\(hasattr\\(pynvml, 'NVML_FI_DEV_MEMORY_TEMP'\\), hasattr\\(pynvml, 'nvmlDeviceGetFieldValues'\\)\\)\")",
+      "Bash(python -c ':*)",
+      "Bash(python -m pytest tests/ -x -q)",
+      "Bash(python -m pytest tests/ -q --no-header)",
+      "Bash(python -m pytest tests/test_tui_widgets.py tests/test_tui_history.py tests/test_tui_dashboard.py -q --no-header)"
+    ]
+  }
+}

@@ -15,6 +15,7 @@ class GPUSample:
     memory_used_mib: float
     memory_total_mib: float
     power_draw_w: float
+    memory_junction_temp_c: float | None = None
 
     @property
     def memory_fraction(self) -> float:
@@ -28,6 +29,8 @@ class GPUStats:
     current: GPUSample
     max_temp_24h: float
     avg_temp_1h: float
+    junction_max_24h: float | None = None
+    junction_avg_1h: float | None = None
 
 class HistoryRow(TypedDict):
     timestamp: float
@@ -53,10 +56,10 @@ def sample_to_row(sample: GPUSample) -> dict:
         "memory_used_mib": sample.memory_used_mib,
         "memory_total_mib": sample.memory_total_mib,
         "power_draw_w": sample.power_draw_w,
+        "memory_junction_temp_c": sample.memory_junction_temp_c,
     }
 
 def row_to_sample(row) -> GPUSample:
-    # row is a sqlite3.Row or dict with the same keys as sample_to_row output
     gpu = GPUInfo(index=row["gpu_index"], uuid=row["gpu_uuid"], name=row["gpu_name"])
     return GPUSample(
         gpu=gpu,
@@ -65,4 +68,5 @@ def row_to_sample(row) -> GPUSample:
         memory_used_mib=row["memory_used_mib"],
         memory_total_mib=row["memory_total_mib"],
         power_draw_w=row["power_draw_w"],
+        memory_junction_temp_c=row["memory_junction_temp_c"],
     )
