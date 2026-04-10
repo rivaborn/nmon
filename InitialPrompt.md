@@ -1,5 +1,13 @@
 **Initial prompt to create a plan for my Local LLM to write the nmon App. Claude improved on the prompt (final version is in nmon_prompt.md) and Claudes criticism of the initial prompt is included below.**
 
+**Pipeline**
+1. Initial Prompt -> Improved by Claude to nmon_prompt.md
+2. Claude processes nmon_prompt.md and generates nmonArchitecture.md
+3. Claude processes nmonArchitecture.md to produce aidercommands.md, commands that will be sent to the Local LLM server through aider.
+4. run_aider.py processes aidercommands.md to write the App
+5. Debug
+6. Profit!
+
 **Claude to LocalLLM Prompt - nmon**
 
 **Nvidia Monitor**
