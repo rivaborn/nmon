@@ -121,6 +121,12 @@ junction (bright magenta) are overlaid on the same chart. Press `h`
 or `j` to toggle the respective overlays. The panel footer shows a
 legend when overlays are active.
 
+A horizontal **temperature threshold line** is also drawn (default
+95°C, bright white). Press `t` to toggle, `↑` / `↓` to raise or
+lower it by 0.5°C. The chart auto-expands its Y range to include the
+threshold, so the line is always visible. The position and toggle
+state persist across restarts via `.nmon_state.json`.
+
 ### 3 — Power History
 
 Line chart of power draw over time.
@@ -148,6 +154,8 @@ chart, formatted as `collected: Hh Mm Ss`.
 | `-` | Decrease sample interval |
 | `h` | Toggle GPU Hotspot Temperature display |
 | `j` | Toggle GPU Memory Junction Temperature display |
+| `t` | Toggle temperature threshold line (Temp tab) |
+| `↑` / `↓` | Raise / lower threshold line by 0.5°C (Temp tab only) |
 | `q` | Quit |
 
 ## Configuration

@@ -10,3 +10,8 @@ retention_hours = 24
 [display]
 default_tab = "dashboard"
 default_time_window_hours = 1
+# Temp-tab threshold line (first-run default). After the first run the
+# live value and on/off state are persisted in .nmon_state.json next to
+# the DB and override these values on the next startup.
+temp_threshold_c = 95.0
+show_temp_threshold = true

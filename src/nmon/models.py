@@ -48,6 +48,8 @@ class AppConfig:
     retention_hours: int
     default_tab: str
     default_time_window_hours: int
+    default_temp_threshold_c: float = 95.0
+    default_show_temp_threshold: bool = True
 
 def sample_to_row(sample: GPUSample) -> dict:
     return {

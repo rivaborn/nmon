@@ -94,6 +94,7 @@ nmon/
 │   ├── __main__.py             CLI parsing, source selection, wiring
 │   ├── config.py               TOML loading, validation, defaults
 │   ├── models.py               Dataclasses and TypedDicts
+│   ├── state.py                JSON runtime-state persistence (threshold, etc.)
 │   ├── storage.py              SQLite schema, insert, query, prune
 │   ├── collector.py            Background sampling thread
 │   ├── gpu/
@@ -259,7 +260,11 @@ Two implementations:
   when the user toggles it off.
 - **2 Temp** — line chart of core temperature over the selected time
   window. Hotspot is overlaid in bright red and memory junction in
-  bright magenta, per GPU, when available.
+  bright magenta, per GPU, when available. A horizontal threshold
+  line (bright white) is overlaid at a user-configurable temperature
+  (default 95°C). The Y range expands to include the threshold so
+  the line is always visible; the position and on/off state persist
+  across restarts via a small JSON state file next to the DB.
 - **3 Power** — line chart of power draw.
 - **4 Memory** — line chart of VRAM usage.
 
@@ -272,6 +277,8 @@ Two implementations:
 | `[` / `]` or `←` / `→` | History time window (1 / 4 / 12 / 24 hr) |
 | `h` | Toggle hotspot display on dashboard and temp chart |
 | `j` | Toggle memory junction display on dashboard and temp chart |
+| `t` | Toggle temperature threshold line on/off |
+| `↑` / `↓` | Raise / lower threshold line by 0.5°C (Temp tab only) |
 | `q` or Ctrl+C | Quit |
 
 ### 7.3 Braille charts
@@ -587,10 +594,30 @@ retention_hours = 24        # pruned on every write cycle
 [display]
 default_tab               = "dashboard"
 default_time_window_hours = 1
+temp_threshold_c          = 95.0    # first-run threshold line position
+show_temp_threshold       = true    # first-run threshold line on/off
 ```
 
 CLI overrides: `--config PATH`, `--interval N`, `--db PATH`. Applied
 after file parsing, so CLI wins.
+
+### Runtime state file
+
+Values the user adjusts from the TUI (threshold line position and
+on/off state) are persisted to a separate JSON file alongside the
+SQLite DB:
+
+```
+<db_dir>/.nmon_state.json
+```
+
+`nmon.state.load_state()` reads it at startup and overrides the
+config.toml defaults; `nmon.state.save_state()` writes it atomically
+(`tmp → os.replace`) whenever the user presses a key that changes a
+persisted value. Failures to read or write are swallowed — persistence
+is best-effort and the TUI never dies because of a failed save. The
+state file is kept separate from `config.toml` so nmon never
+overwrites user-edited config files or loses their comments.
 
 ---
 

@@ -106,6 +106,8 @@ retention_hours = 24
 [display]
 default_tab = "dashboard"
 default_time_window_hours = 1
+temp_threshold_c = 95.0
+show_temp_threshold = true
 ```
 
 ### Configuration Options
@@ -119,6 +121,13 @@ default_time_window_hours = 1
 | storage | retention_hours | Data retention period (hours) | 24 |
 | display | default_tab | Starting tab ("dashboard", "temp", "power", "memory") | "dashboard" |
 | display | default_time_window_hours | Starting time window (1, 4, 12, or 24) | 1 |
+| display | temp_threshold_c | First-run position of the Temp tab threshold line (°C) | 95.0 |
+| display | show_temp_threshold | Whether the threshold line is enabled on first run | true |
+
+`temp_threshold_c` and `show_temp_threshold` are **first-run defaults
+only** — after the first run the live values are persisted in
+`.nmon_state.json` next to the database, and that file overrides
+config.toml on the next startup.
 
 ---
 
@@ -158,10 +167,30 @@ GPU on the same chart:
 - **Hotspot temperature** — in bright red when available.
 - **Memory junction temperature** — in bright magenta when available.
 
-The panel footer shows a legend (e.g. `(hotspot: bright red,
-junction: bright magenta)`) whenever either overlay is active. Each
-overlay can be independently toggled with `h` (hotspot) and `j`
-(junction).
+The panel footer shows a compact legend (e.g. `hot=red jct=magenta`)
+whenever any overlay is active. Each overlay can be independently
+toggled with `h` (hotspot) and `j` (junction).
+
+### Temperature Threshold Line
+
+The Temp tab also draws a horizontal reference line at a configurable
+temperature — useful for marking a throttling ceiling or a personal
+"too hot" limit. Default position is **95°C**.
+
+- Press **`t`** to toggle the line on and off.
+- When the Temp tab is active, **Up / Down arrows** raise or lower the
+  line by **0.5°C** per press, clamped to `[0, 150]`.
+- The chart's Y range automatically expands to include the threshold,
+  so the line is always visible regardless of current GPU temperature.
+- The threshold line is drawn in bright white; data dots win where
+  they overlap with the line.
+- The footer legend includes `thr=NN.NC` when the line is active.
+
+Position and on/off state are persisted in `.nmon_state.json` next to
+the database, so they survive restarts. The `config.toml` values
+under `[display]` (`temp_threshold_c`, `show_temp_threshold`) set the
+**first-run** defaults; the state file overrides them on every
+subsequent startup.
 
 ### Chart Time Span
 
@@ -180,6 +209,9 @@ currently displayed, formatted as `Hh Mm Ss` (e.g. `collected: 0h 29m
 | ] or → | Increase time window (history tabs) |
 | h | Toggle GPU Hotspot Temperature on/off |
 | j | Toggle GPU Memory Junction Temperature on/off |
+| t | Toggle temperature threshold line on/off (Temp tab) |
+| ↑ | Raise threshold line by 0.5°C (Temp tab only) |
+| ↓ | Lower threshold line by 0.5°C (Temp tab only) |
 | q | Quit the app |
 
 ---

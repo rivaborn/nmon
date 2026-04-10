@@ -9,10 +9,15 @@ from rich.text import Text
 from nmon.collector import Collector
 from nmon.storage import Storage
 from nmon.models import AppConfig, GPUStats
+from nmon.state import state_path_for_db, load_state, save_state
 from nmon.tui import dashboard, history
 from nmon.tui.widgets import StatusBar
 
 TABS = ["dashboard", "temp", "power", "memory"]
+
+TEMP_THRESHOLD_MIN = 0.0
+TEMP_THRESHOLD_MAX = 150.0
+TEMP_THRESHOLD_STEP = 0.5
 
 class NmonApp:
     def __init__(self, collector: Collector, storage: Storage, config: AppConfig):
@@ -23,9 +28,32 @@ class NmonApp:
         self._time_window = config.default_time_window_hours
         self._show_hotspot = True
         self._show_junction = True
+
+        self._state_path = state_path_for_db(config.db_path)
+        state = load_state(self._state_path, {
+            "temp_threshold_c": config.default_temp_threshold_c,
+            "show_temp_threshold": config.default_show_temp_threshold,
+        })
+        try:
+            self._temp_threshold_c = float(state["temp_threshold_c"])
+        except (TypeError, ValueError):
+            self._temp_threshold_c = config.default_temp_threshold_c
+        self._temp_threshold_c = max(
+            TEMP_THRESHOLD_MIN,
+            min(TEMP_THRESHOLD_MAX, self._temp_threshold_c),
+        )
+        self._show_temp_threshold = bool(state["show_temp_threshold"])
+
         self._quit = False
         self._lock = threading.Lock()
         self._redraw = threading.Event()
+
+    def _persist_state(self) -> None:
+        """Snapshot caller holds self._lock."""
+        save_state(self._state_path, {
+            "temp_threshold_c": self._temp_threshold_c,
+            "show_temp_threshold": self._show_temp_threshold,
+        })
 
     def run(self) -> None:
         self._collector.start()
@@ -61,6 +89,8 @@ class NmonApp:
             window = self._time_window
             show_hotspot = self._show_hotspot
             show_junction = self._show_junction
+            temp_threshold_c = self._temp_threshold_c
+            show_temp_threshold = self._show_temp_threshold
         tabs_str = "  ".join(
             f"\\[{t.upper()}]" if t == tab else t.capitalize()
             for t in TABS
@@ -88,6 +118,8 @@ class NmonApp:
                     self._storage, gpu_list, tab, window,
                     show_hotspot=show_hotspot,
                     show_junction=show_junction,
+                    temp_threshold_c=temp_threshold_c,
+                    show_temp_threshold=show_temp_threshold,
                 )
             )
         interval = self._collector._interval
@@ -96,6 +128,8 @@ class NmonApp:
                 interval, tab, len(self._collector.warnings),
                 show_hotspot=show_hotspot,
                 show_junction=show_junction,
+                temp_threshold_c=temp_threshold_c,
+                show_temp_threshold=show_temp_threshold,
             )
         )
         return layout
@@ -116,6 +150,7 @@ class NmonApp:
                 key = ch
 
             changed = True
+            persist = False
             with self._lock:
                 if key in ('q', '\x03'):          # q or Ctrl+C
                     self._quit = True
@@ -135,8 +170,25 @@ class NmonApp:
                     self._show_hotspot = not self._show_hotspot
                 elif key in ('j', 'J'):
                     self._show_junction = not self._show_junction
+                elif key in ('t', 'T'):
+                    self._show_temp_threshold = not self._show_temp_threshold
+                    persist = True
+                elif key == '\xe0H' and self._tab == "temp":   # up arrow
+                    self._temp_threshold_c = min(
+                        TEMP_THRESHOLD_MAX,
+                        round(self._temp_threshold_c + TEMP_THRESHOLD_STEP, 1),
+                    )
+                    persist = True
+                elif key == '\xe0P' and self._tab == "temp":   # down arrow
+                    self._temp_threshold_c = max(
+                        TEMP_THRESHOLD_MIN,
+                        round(self._temp_threshold_c - TEMP_THRESHOLD_STEP, 1),
+                    )
+                    persist = True
                 else:
                     changed = False
+                if persist:
+                    self._persist_state()
             if changed:
                 self._redraw.set()
 

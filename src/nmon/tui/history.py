@@ -17,6 +17,7 @@ TIME_WINDOWS = [1, 4, 12, 24]
 GPU_COLORS = ["cyan", "magenta", "green", "yellow", "blue", "red"]
 HOTSPOT_COLOR = "bright_red"
 JUNCTION_COLOR = "bright_magenta"
+THRESHOLD_COLOR = "bright_white"
 
 def format_time_window_tabs(current: int) -> str:
     parts = []
@@ -39,6 +40,8 @@ def build_history(
     height: int = 10,
     show_hotspot: bool = True,
     show_junction: bool = True,
+    temp_threshold_c: float | None = None,
+    show_temp_threshold: bool = False,
 ):
     cfg = METRIC_CONFIG[metric]
     since = time.time() - time_window_hours * 3600
@@ -67,20 +70,33 @@ def build_history(
                     all_timestamps.extend(r["timestamp"] for r in jrows)
                     have_junction = True
         groups.append((series_list, gpu.name))
-    chart = MultiSeriesChart(groups, width - 10, height, cfg["unit"],
-                             format_time_window_tabs(time_window_hours))
+
+    threshold = (
+        temp_threshold_c
+        if metric == "temp" and show_temp_threshold and temp_threshold_c is not None
+        else None
+    )
+
+    chart = MultiSeriesChart(
+        groups, width - 10, height, cfg["unit"],
+        format_time_window_tabs(time_window_hours),
+        threshold=threshold,
+        threshold_color=THRESHOLD_COLOR,
+    )
     if all_timestamps:
         span = format_collected_span(max(all_timestamps) - min(all_timestamps))
     else:
         span = "0h 0m 0s"
     title = f"{cfg['label']} History ({cfg['unit']})"
-    subtitle = f"{format_time_window_tabs(time_window_hours)}  collected: {span}"
+    subtitle = f"{format_time_window_tabs(time_window_hours)}  span: {span}"
     if metric == "temp":
         legend_bits = []
         if have_hotspot:
-            legend_bits.append("hotspot: bright red")
+            legend_bits.append("hot=red")
         if have_junction:
-            legend_bits.append("junction: bright magenta")
+            legend_bits.append("jct=magenta")
+        if threshold is not None:
+            legend_bits.append(f"thr={threshold:.1f}C")
         if legend_bits:
-            subtitle += "  (" + ", ".join(legend_bits) + ")"
+            subtitle += "  " + " ".join(legend_bits)
     return Panel(chart, title=title, subtitle=subtitle)
