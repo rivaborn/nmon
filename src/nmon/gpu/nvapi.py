@@ -46,11 +46,14 @@ _NVAPI_MAX_THERMAL_SENSORS_PER_GPU = 3
 _NVAPI_MAX_PHYSICAL_GPUS = 64
 _NVAPI_OK = 0
 
-# Sensor index that holds memory junction temperature on GDDR6X-equipped
-# consumer cards (RTX 3080 Ti / 3090 / 3090 Ti / 4070 Ti / 4080 / 4090).
-# Index 0 is the GPU core sensor. If a different card lays this out
-# differently, run the diagnostic entry point and adjust this constant.
-_SENSOR_INDEX_MEMORY = 1
+# Channel indices on Ampere / Ada consumer cards. Index 0 is always the
+# GPU core sensor; index 1 is consistently the GPU Hot Spot (hottest
+# point on the die) on every tested card. Index 9 holds the GDDR6X
+# memory junction on cards that expose it (RTX 3080 / 3090 / 4080 /
+# 4090). If a card reports a clearly hotter channel at a different
+# index, update _SENSOR_INDEX_MEMORY after running the diagnostic.
+_SENSOR_INDEX_HOTSPOT = 1
+_SENSOR_INDEX_MEMORY = 9
 
 
 class _NvGpuClientThermalSensors(ctypes.Structure):
@@ -187,10 +190,12 @@ def _enum_gpus() -> bool:
     return True
 
 
-# Sensor-channel masks to try, widest first. 0xFF covers the 8 channels
-# observed on Ampere consumer cards; we fall back to narrower masks if
-# the driver rejects it.
-_SENSOR_MASKS = (0xFF, 0x1F, 0x0F, 0x03, 0x01)
+# Sensor-channel masks to try, widest first. 0x3FF asks for 10 channels
+# (enough to reach the GDDR6X memory junction at index 9); 0xFF covers
+# the 8 channels observed on cards without a dedicated memory sensor.
+# The driver rejects masks that ask for channels the card doesn't have,
+# so we fall through to narrower masks.
+_SENSOR_MASKS = (0xFFFF, 0x3FF, 0x1FF, 0xFF, 0x1F, 0x0F, 0x03, 0x01)
 
 # Temperatures are reported in Q8.8 fixed point: upper 8 bits are whole
 # degrees C, lower 8 bits are fractional. Verified by cross-referencing
@@ -231,13 +236,18 @@ def _read_thermal_sensors(gpu_index: int):
     return None
 
 
-def read_memory_junction_temp(gpu_index: int) -> float | None:
-    """Read GDDR6/6X memory junction temperature via NVAPI.
+def read_thermal_channels(gpu_index: int) -> dict[str, float] | None:
+    """Read the GPU hotspot and memory junction temperatures via NVAPI.
 
-    Returns the temperature in degrees C, or None if NVAPI is
-    unavailable, the GPU doesn't expose the sensor, or the call fails.
-    Unsupported GPUs are cached so we don't keep paying for the round
-    trip every sample.
+    Returns a dict with some subset of the keys "hotspot" and "memory"
+    (values in degrees C), or None if NVAPI is entirely unavailable or
+    the thermal channels call fails for all masks. A GPU that succeeds
+    on the call but has no populated value at the requested index is
+    simply omitted from the dict — the caller gets an empty dict back,
+    which we also turn into None to signal "nothing useful".
+
+    Once a GPU fails entirely it is cached as unsupported so we don't
+    keep paying for the round trip every sample.
     """
     with _lock:
         if gpu_index in _state["unsupported_gpus"]:
@@ -246,20 +256,24 @@ def read_memory_junction_temp(gpu_index: int) -> float | None:
         if data is None:
             _state["unsupported_gpus"].add(gpu_index)
             return None
-        raw = data.temperatures[_SENSOR_INDEX_MEMORY]
-        # Unpopulated sensor slots report 0. A real junction temp is
-        # never 0 or negative on a running card, so treat that as
-        # unsupported rather than showing a nonsense value.
-        if raw <= 0:
+        result: dict[str, float] = {}
+        hotspot_raw = data.temperatures[_SENSOR_INDEX_HOTSPOT]
+        if hotspot_raw > 0:
+            result["hotspot"] = hotspot_raw / _TEMP_DIVISOR
+        memory_raw = data.temperatures[_SENSOR_INDEX_MEMORY]
+        if memory_raw > 0:
+            result["memory"] = memory_raw / _TEMP_DIVISOR
+        if not result:
             _state["unsupported_gpus"].add(gpu_index)
             return None
-        return raw / _TEMP_DIVISOR
+        return result
 
 
 def _probe_and_label_channels(gpu_index: int, core_temp: int | None) -> None:
-    """Read the undocumented thermal channels the production way
-    (v2/168B struct, mask=0xFF) and label each populated channel by
-    comparing its value against the documented GPU core temp."""
+    """Read the undocumented thermal channels and label each populated
+    channel by comparing its value against the documented GPU core
+    temp. Flags the current production indices for hotspot and memory
+    junction so it's easy to see whether they're wired on this card."""
     data = _read_thermal_sensors(gpu_index)
     if data is None:
         print("  client thermal channels: call failed for all masks")
@@ -273,21 +287,31 @@ def _probe_and_label_channels(gpu_index: int, core_temp: int | None) -> None:
             continue
         any_sensor = True
         temp = raw / _TEMP_DIVISOR
-        label = ""
+        tags = []
+        if j == _SENSOR_INDEX_HOTSPOT:
+            tags.append("[HOTSPOT used by nmon]")
+        if j == _SENSOR_INDEX_MEMORY:
+            tags.append("[MEMORY JUNCTION used by nmon]")
         if core_temp is not None:
             diff = temp - core_temp
             if abs(diff) <= 2:
-                label = "  <-- matches GPU core"
+                tags.append("matches GPU core")
             elif diff > 2:
-                label = f"  <-- core + {diff:+.1f}C (likely memory/hotspot)"
+                tags.append(f"core {diff:+.1f}C (hotter than core)")
             else:
-                label = f"  <-- core {diff:+.1f}C"
-        print(f"    sensor[{j:2d}] = {temp:6.2f}C  (raw {raw}){label}")
+                tags.append(f"core {diff:+.1f}C")
+        suffix = ("  <-- " + " | ".join(tags)) if tags else ""
+        print(f"    sensor[{j:2d}] = {temp:6.2f}C  (raw {raw}){suffix}")
     if not any_sensor:
         print("    (no populated sensors)")
     print()
-    print("  To wire a different sensor index into nmon, edit")
-    print("  _SENSOR_INDEX_MEMORY in src/nmon/gpu/nvapi.py.")
+    print("  Channel roles on tested Ampere/Ada cards:")
+    print("    index 0 = GPU core (same as documented path)")
+    print(f"    index {_SENSOR_INDEX_HOTSPOT} = GPU hotspot (hottest point on the die)")
+    print(f"    index {_SENSOR_INDEX_MEMORY} = GPU memory junction (GDDR6X sensor)")
+    print("  If a clearly hotter channel appears at a different index on")
+    print("  your card, update _SENSOR_INDEX_HOTSPOT or _SENSOR_INDEX_MEMORY")
+    print("  in src/nmon/gpu/nvapi.py.")
 
 
 def _probe_documented_thermal_settings(gpu_index: int) -> int | None:

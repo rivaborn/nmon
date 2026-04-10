@@ -131,13 +131,14 @@ GPUSource.sample_all()  →  list[GPUSample]
 `GPUSample` carries:
 
 ```python
-gpu: GPUInfo                    # index, uuid, name
-timestamp: float                # Unix epoch
-temperature_c: float            # core temp
+gpu: GPUInfo                          # index, uuid, name
+timestamp: float                      # Unix epoch
+temperature_c: float                  # GPU core temp
 memory_used_mib: float
 memory_total_mib: float
 power_draw_w: float
-memory_junction_temp_c: float | None   # VRAM junction, None on unsupported cards
+hotspot_temp_c: float | None          # die hotspot, None on unsupported cards
+memory_junction_temp_c: float | None  # GDDR6X junction, None on unsupported cards
 ```
 
 ### 4.2 Render path (reader)
@@ -145,6 +146,7 @@ memory_junction_temp_c: float | None   # VRAM junction, None on unsupported card
 ```
 collector.get_latest()             → current list[GPUSample]
 storage.get_current_stats(i)       → (max_temp_24h, avg_temp_1h,
+                                      hotspot_max_24h, hotspot_avg_1h,
                                       junction_max_24h, junction_avg_1h)
 storage.get_history(i, metric, t)  → list[HistoryRow]
                              │
@@ -172,30 +174,38 @@ CREATE TABLE IF NOT EXISTS gpu_samples (
     memory_used_mib        REAL    NOT NULL,
     memory_total_mib       REAL    NOT NULL,
     power_draw_w           REAL    NOT NULL,
+    hotspot_temp_c         REAL,               -- NULL = sensor unsupported
     memory_junction_temp_c REAL                -- NULL = sensor unsupported
 );
 CREATE INDEX IF NOT EXISTS idx_samples_gpu_time
     ON gpu_samples (gpu_index, timestamp);
 ```
 
-The `memory_junction_temp_c` column was added after the initial release.
-`Storage._create_schema()` runs `ALTER TABLE ... ADD COLUMN` inside a
-try/except so upgrading an existing `nmon.db` is a no-op if the column
-already exists.
+The `hotspot_temp_c` and `memory_junction_temp_c` columns were added
+after the initial release. `Storage._create_schema()` runs an
+idempotent migration: it uses `PRAGMA table_info` to see what columns
+already exist, and if it finds a legacy `memory_junction_temp_c`
+without a `hotspot_temp_c`, it does
+`ALTER TABLE ... RENAME COLUMN memory_junction_temp_c TO hotspot_temp_c`
+(since the old column's data was actually hotspot values), then adds
+a fresh `memory_junction_temp_c` for the real GDDR6X sensor. A fresh
+install just creates the table with both columns.
 
-`get_current_stats()` returns four aggregates in a single query so the
+`get_current_stats()` returns six aggregates in a single query so the
 dashboard avoids repeated round trips:
 
 ```sql
 SELECT MAX(CASE WHEN timestamp >= ? THEN temperature_c END),
        AVG(CASE WHEN timestamp >= ? THEN temperature_c END),
+       MAX(CASE WHEN timestamp >= ? THEN hotspot_temp_c END),
+       AVG(CASE WHEN timestamp >= ? THEN hotspot_temp_c END),
        MAX(CASE WHEN timestamp >= ? THEN memory_junction_temp_c END),
        AVG(CASE WHEN timestamp >= ? THEN memory_junction_temp_c END)
   FROM gpu_samples WHERE gpu_index = ?;
 ```
 
-`get_history()` filters `WHERE metric IS NOT NULL` so the junction
-column's NULLs on unsupported GPUs don't show up as gaps in the chart.
+`get_history()` filters `WHERE metric IS NOT NULL` so NULL values on
+unsupported GPUs don't show up as gaps in the chart.
 
 ---
 
@@ -213,16 +223,18 @@ class GPUSource(ABC):
 
 Two implementations:
 
-- **`NvmlSource`** — uses `nvidia-ml-py`. Reads core temp, memory info,
-  and power via NVML. For memory junction temperature, it tries NVML's
-  `NVML_FI_DEV_MEMORY_TEMP` field first; if NVML returns
-  `NVML_ERROR_NOT_SUPPORTED` (the common case on consumer GeForce
-  cards), it falls back to `nvapi.read_memory_junction_temp()`. Failed
-  lookups are cached per GPU index so repeated samples don't re-probe
-  unsupported hardware.
+- **`NvmlSource`** — uses `nvidia-ml-py`. Reads GPU core temp, memory
+  info, and power via NVML. For each sample it also calls
+  `nvapi.read_thermal_channels()` once per GPU to get hotspot and
+  memory junction out of the same NVAPI request; the NVML field
+  `NVML_FI_DEV_MEMORY_TEMP` is tried first for memory junction so
+  data-center GPUs get the documented path. Failed lookups (NVML
+  not-supported, NVAPI function missing, all masks rejected, sensor
+  slot reports 0) are cached per GPU index so repeated samples don't
+  re-probe unsupported hardware.
 - **`SmiSource`** — used when NVML isn't available. Shells out to
   `nvidia-smi --xml-format --query-gpu=...` and parses the XML. Does
-  not attempt memory junction temperature.
+  not attempt hotspot or memory junction temperatures.
 
 `__main__._pick_source()` prefers NVML and falls back to SMI.
 
@@ -236,14 +248,18 @@ Two implementations:
  nmon  [DASHBOARD]  Temp  Power  Memory
 ```
 
-- **1 Dashboard** — a `rich.table.Table` of current GPU status stacked
-  above a second `Table` that shows memory junction temperature for the
-  GPUs that expose it. Stacking is done with `rich.console.Group`; the
-  second table is omitted when no GPU reports junction temp or when the
-  user toggles it off.
+- **1 Dashboard** — a `rich.table.Table` of current GPU status, with
+  two optional tables stacked below it via `rich.console.Group`:
+  - **GPU Hotspot Temperature** — appears when any GPU exposes the
+    die hotspot sensor (nearly all modern consumer cards via NVAPI).
+  - **GPU Memory Junction Temperature** — appears when any GPU
+    exposes the GDDR6X memory junction sensor (RTX 3080 / 3090 /
+    4080 / 4090 and similar).
+  Each optional section is hidden when no GPU exposes the sensor or
+  when the user toggles it off.
 - **2 Temp** — line chart of core temperature over the selected time
-  window. Memory junction temperature is overlaid on the same chart in
-  bright red when available.
+  window. Hotspot is overlaid in bright red and memory junction in
+  bright magenta, per GPU, when available.
 - **3 Power** — line chart of power draw.
 - **4 Memory** — line chart of VRAM usage.
 
@@ -254,7 +270,8 @@ Two implementations:
 | `1`–`4` | Switch tabs |
 | `+` / `-` | Sampling interval |
 | `[` / `]` or `←` / `→` | History time window (1 / 4 / 12 / 24 hr) |
-| `j` | Toggle junction-temp display on dashboard and temp chart |
+| `h` | Toggle hotspot display on dashboard and temp chart |
+| `j` | Toggle memory junction display on dashboard and temp chart |
 | `q` or Ctrl+C | Quit |
 
 ### 7.3 Braille charts
@@ -287,31 +304,62 @@ the configured time window.
 
 ---
 
-## 8. NVAPI Memory Junction Fallback
+## 8. NVAPI Hotspot and Memory Junction Fallback
 
-This section documents the reverse-engineering findings that made
-memory junction temperature work on consumer GeForce cards.
+This section documents the reverse-engineering findings that made GPU
+Hotspot and GDDR6X Memory Junction temperatures work on consumer
+GeForce cards. It includes a correction to an earlier, wrong
+identification of what we were actually reading.
 
-### 8.1 The problem
+### 8.1 The two sensors
 
-NVML exposes memory junction temperature via the field-value API:
+NVIDIA consumer GPUs expose up to three distinct temperature sensors
+that HWiNFO / GPU-Z / MSI Afterburner display separately:
 
-```python
-pynvml.nvmlDeviceGetFieldValues(handle, [pynvml.NVML_FI_DEV_MEMORY_TEMP])
-```
+1. **GPU Temperature** — the die-averaged core temperature, also
+   reported by NVML and the documented `NvAPI_GPU_GetThermalSettings`.
+2. **GPU Hotspot Temperature** — the hottest single point on the
+   GPU die. Always several degrees above core. Exposed via the
+   undocumented `NvAPI_GPU_ThermChannelGetStatus` at channel 1.
+3. **GPU Memory Junction Temperature** — the GDDR6X memory chip
+   sensor. Only wired on GDDR6X-equipped cards (RTX 3080 / 3090 /
+   3090 Ti / 4070 Ti / 4080 / 4090). On data-center GPUs it's
+   exposed by NVML's `NVML_FI_DEV_MEMORY_TEMP` field; on consumer
+   cards NVML returns `NVML_ERROR_NOT_SUPPORTED` and the value lives
+   at channel 9 of the undocumented NVAPI thermal channel function.
 
-On data-center GPUs (A100, H100, etc.) and some workstation cards this
-works. On consumer GeForce cards — **including cards with a real
-GDDR6/6X junction sensor like the RTX 3080 / 3090 / 4080 / 4090** —
-NVML returns `NVML_ERROR_NOT_SUPPORTED (3)` even though the sensor
-exists in hardware.
+nmon reads (1) through NVML, then calls NVAPI once per sample to get
+(2) and (3) together out of the same struct. Neither extra sensor is
+required — if the card or driver doesn't expose one, the
+corresponding dashboard section and chart overlay stay hidden.
 
-Third-party tools (HWiNFO, GPU-Z, MSI Afterburner) read the same
-sensor via NVAPI — Nvidia's Windows-only C API — using an undocumented
-thermal channel function. nmon's `gpu/nvapi.py` implements that path in
-pure-Python `ctypes`.
+### 8.2 The misidentification that came first
 
-### 8.2 NVAPI basics
+The first iteration of this code read channel 1 and labelled it
+"memory junction". Cross-checking against HWiNFO on an RTX 3090
+revealed the mistake: channel 1 on every Ampere / Ada consumer card
+is actually the GPU Hotspot sensor, not memory. The tell is the
+delta from core: hotspot runs +3–8°C hotter than core, while a
+GDDR6X memory junction runs +10–30°C hotter under load.
+
+The fix was:
+
+- Rename `memory_junction_temp_c` → `hotspot_temp_c` everywhere the
+  old sensor's value flows (model, DB column, dashboard section
+  title, chart overlay color, toggle key).
+- Add a genuinely new `memory_junction_temp_c` field that reads
+  channel **9** of the same NVAPI call, which is where GDDR6X cards
+  expose the memory sensor.
+- Widen the production mask list so the call can reach channels
+  beyond 7 (see §8.3.3).
+
+The SQLite schema migration handles both cases: an `nmon.db` from
+before the rename has its `memory_junction_temp_c` column renamed to
+`hotspot_temp_c` (preserving the historical data, which was hotspot
+all along), then a fresh `memory_junction_temp_c` column is added
+for the actual memory sensor.
+
+### 8.3 NVAPI basics
 
 NVAPI exposes a single entry point, `nvapi_QueryInterface(function_id)
 → void*`. Every other function is resolved by passing a 32-bit id and
@@ -321,8 +369,8 @@ getting back a function pointer. The public ids we use:
 |----|----------|--------|
 | `0x0150E828` | `NvAPI_Initialize` | documented |
 | `0xE5AC921F` | `NvAPI_EnumPhysicalGPUs` | documented |
-| `0xE3640A56` | `NvAPI_GPU_GetThermalSettings` | documented, only reports core |
-| `0x65FE3AAD` | `NvAPI_GPU_ThermChannelGetStatus` | **undocumented, reports all channels including memory junction** |
+| `0xE3640A56` | `NvAPI_GPU_GetThermalSettings` | documented, only reports core temp |
+| `0x65FE3AAD` | `NvAPI_GPU_ThermChannelGetStatus` | **undocumented; reports hotspot, memory junction, and every other die channel** |
 
 `NvAPI_GPU_ThermChannelGetStatus` takes a physical GPU handle and a
 pointer to a versioned struct. The version field encodes both the
@@ -333,7 +381,7 @@ bits):
 version_tag = struct_size | (version_number << 16)
 ```
 
-### 8.3 The struct and the investigation
+### 8.4 The struct and the investigation
 
 The struct layout, mask semantics, and unit of the temperature field
 are **not documented**. What worked, and how we found each piece:
@@ -375,24 +423,32 @@ cross-referenced against the documented GPU core temperature. In
 layout A the values were scattered and didn't match the documented
 core temp.
 
-**Mask — `0xFF`, not `0xFFFFFFFF`**
+**Mask — iterate from wide to narrow**
 
 Initial attempts with `mask = 0xFFFFFFFF` (request all 32 channels)
-returned `-1 (NVAPI_ERROR)`. The probe iterated through masks
-`0x01, 0x0F, 0xFF, 0xFFFFFFFF` and found that the driver rejects any
-mask that asks for channels the card doesn't have. On the RTX 3080
-Laptop tested, exactly 8 channels are populated, so `mask = 0xFF` is
-the widest accepted value. Production uses `0xFF` with a graceful
-fallback through `0x1F, 0x0F, 0x03, 0x01` in case some card has even
-fewer.
+returned `-1 (NVAPI_ERROR)`. The driver rejects any mask that asks
+for channels the card doesn't have, so the right approach is to
+probe from the widest plausible mask downwards and use the first
+mask that succeeds:
+
+```python
+_SENSOR_MASKS = (0xFFFF, 0x3FF, 0x1FF, 0xFF, 0x1F, 0x0F, 0x03, 0x01)
+```
+
+On a card without GDDR6X (e.g. RTX 3080 Laptop with GDDR6), `0x1FF`
+succeeds and exposes 9 channels (0-8). On a card with GDDR6X (e.g.
+RTX 3080 / 3090 / 4080 / 4090), `0x3FF` succeeds and exposes 10
+channels including index 9 (memory junction). Widening the mask
+list was the key change that made memory junction reachable after
+hotspot had already been working.
 
 **Unit — Q8.8 fixed point (divide raw by 256)**
 
 Several published reverse-engineering notes claim the values are in
 milli-degrees Celsius (divide by 1000). This is **wrong** for this
-function. With the right struct layout and mask, the first sensor of
-the RTX 3080 Laptop returned `raw = 16648` while the documented
-thermal settings call reported `current = 65°C`. The math:
+function. With the right struct layout and mask, channel 0 of the
+RTX 3080 Laptop returned `raw = 16648` while the documented thermal
+settings call reported `current = 65°C`. The math:
 
 ```
 16648 / 256 = 65.03    ← matches
@@ -404,37 +460,50 @@ thermal settings call reported `current = 65°C`. The math:
 of integer degrees, 8 bits of fraction. Production divides raw values
 by `256.0`.
 
-**Channel index — empirical**
+**Channel index — empirical, and corrected**
 
-The eight channels on a typical Ampere card look like this under idle
-conditions when the GPU core is at 65°C:
+On an RTX 3080 Laptop at idle with GPU core at 65°C the first nine
+populated channels look like this (values from the diagnostic's
+own output):
 
 ```
-sensor[ 0] =  65.03C    <-- matches GPU core
-sensor[ 1] =  71.19C    <-- core + 6.2C (memory junction)
-sensor[ 2] =  65.03C    <-- matches GPU core
-sensor[ 3] =  65.06C    <-- matches GPU core
-sensor[ 4] =  70.06C    <-- core + 5.1C (hotspot)
-sensor[ 5] =  65.03C    <-- matches GPU core
-sensor[ 6] =  68.91C    <-- core + 3.9C (VRM)
-sensor[ 7] =  66.69C    <-- matches GPU core
+sensor[ 0] =  65.12C    <-- matches GPU core
+sensor[ 1] =  71.16C    <-- hotspot (+6.2C above core)
+sensor[ 2] =  65.12C    <-- core duplicate
+sensor[ 3] =  65.09C    <-- core duplicate
+sensor[ 4] =  70.09C    <-- secondary die hotspot (+5.1C)
+sensor[ 5] =  65.09C    <-- core duplicate
+sensor[ 6] =  68.97C    <-- VRM / power delivery (+4.0C)
+sensor[ 7] =  66.66C    <-- core duplicate
+sensor[ 8] =  63.00C    <-- board / edge sensor
 ```
 
-Channel `1` is the memory junction on every Ampere / Ada consumer card
-tested. nmon reads that index by default; if a new card orders them
-differently the `_SENSOR_INDEX_MEMORY` constant in `gpu/nvapi.py` is
-the one knob to change.
+Note there's no channel 9 here — this card has GDDR6, not GDDR6X,
+so it has no memory junction sensor wired. A GDDR6X card (RTX 3090
+/ 4090) additionally populates channel 9 with the memory junction
+temperature, typically running +10–30°C above core under load.
 
-### 8.4 Production parameters
+Production uses:
+
+- **Channel 1** → GPU Hotspot (verified on every tested Ampere /
+  Ada card, matches HWiNFO's "GPU Hot Spot Temperature")
+- **Channel 9** → GPU Memory Junction (verified against HWiNFO's
+  "GPU Memory Junction Temperature" on GDDR6X cards)
+
+Both indices are constants in `gpu/nvapi.py`, easy to change if a
+future card lays things out differently.
+
+### 8.5 Production parameters
 
 All of the above collapses to a short, concrete set of constants:
 
 ```python
 _NVAPI_GPU_CLIENT_THERMAL_SENSORS_GET_VALUES = 0x65FE3AAD  # function id
 _V2_VERSION  = 168 | (2 << 16)                             # 0x000200a8
-_SENSOR_MASKS = (0xFF, 0x1F, 0x0F, 0x03, 0x01)             # widest first
+_SENSOR_MASKS = (0xFFFF, 0x3FF, 0x1FF, 0xFF, 0x1F, 0x0F, 0x03, 0x01)
 _TEMP_DIVISOR = 256.0                                       # Q8.8 fixed point
-_SENSOR_INDEX_MEMORY = 1                                    # memory junction channel
+_SENSOR_INDEX_HOTSPOT = 1                                   # GPU die hotspot
+_SENSOR_INDEX_MEMORY  = 9                                   # GDDR6X junction
 
 class _NvGpuClientThermalSensors(ctypes.Structure):
     _fields_ = [
@@ -445,24 +514,32 @@ class _NvGpuClientThermalSensors(ctypes.Structure):
     ]
 ```
 
-### 8.5 Diagnostic entry point
+`read_thermal_channels(gpu_index)` returns a `{"hotspot": ...,
+"memory": ...}` dict with either key omitted when that channel is
+zero, or `None` when the whole call path fails. The caller in
+`NvmlSource.sample_all()` merges this with NVML's `NVML_FI_DEV_
+MEMORY_TEMP` result (NVML wins for the memory key when both are
+present) and populates both fields on the resulting `GPUSample`.
+
+### 8.6 Diagnostic entry point
 
 `python -m nmon.gpu.nvapi` prints, for each GPU:
 
-- The documented `NvAPI_GPU_GetThermalSettings` output as a reference
-  (GPU core temp in whole degrees).
-- The undocumented `NvAPI_GPU_ThermChannelGetStatus` output with every
-  populated channel shown in Q8.8 decoded form, auto-labeled by
-  difference from the documented core temp. Channels within 2°C of
-  core are tagged "matches GPU core"; hotter channels are tagged with
-  the delta and an educated guess ("likely memory/hotspot").
+- The documented `NvAPI_GPU_GetThermalSettings` output as a
+  reference (GPU core temp in whole degrees).
+- The undocumented `NvAPI_GPU_ThermChannelGetStatus` output with
+  every populated channel shown in Q8.8 decoded form, auto-labeled
+  by difference from the documented core temp. Channels used by
+  nmon in production are tagged `[HOTSPOT used by nmon]` and
+  `[MEMORY JUNCTION used by nmon]` so mismatches are obvious at a
+  glance.
 
-This same diagnostic was how the layout / mask / divisor / index were
-each nailed down in turn — keeping it in the tree means the next
-unsupported card can be diagnosed without re-running the investigation
-from scratch.
+This same diagnostic was how the struct layout, mask range,
+divisor, and channel indices were each nailed down — keeping it in
+the tree means the next unsupported card can be diagnosed without
+re-running the investigation from scratch.
 
-### 8.6 Failure modes and fallthrough
+### 8.7 Failure modes and fallthrough
 
 Every step of the NVAPI call path is wrapped so failure returns `None`
 instead of raising:
@@ -474,16 +551,21 @@ instead of raising:
 5. `NvAPI_EnumPhysicalGPUs` returns non-zero or fewer GPUs than NVML →
    unsupported index cached.
 6. All sensor masks rejected → unsupported index cached.
-7. Channel `_SENSOR_INDEX_MEMORY` reports `0` → treated as "sensor not
-   wired on this card" and cached.
+7. Both `_SENSOR_INDEX_HOTSPOT` and `_SENSOR_INDEX_MEMORY` report `0`
+   → treated as "no useful channels on this card" and cached.
+
+Individual sensors can also be unpopulated independently. If the
+call succeeds with `mask=0x1FF` (9 channels) the hotspot at index 1
+is returned but the memory junction at index 9 is out of range, so
+`read_thermal_channels` returns `{"hotspot": ...}` with no `memory`
+key. That card's dashboard renders the GPU Status and GPU Hotspot
+sections but omits the Memory Junction section entirely.
 
 Any cached "unsupported" GPU is never re-probed for the remainder of
 the process — one failed call costs at most a few microseconds per
-sample on repeat.
-
-The net effect: nmon never crashes or slows down on cards without a
-junction sensor; it just silently omits the junction dashboard section
-and chart overlay for those cards.
+sample on repeat. The net effect: nmon never crashes or slows down
+on cards without these sensors; it just silently omits whichever
+sections aren't applicable.
 
 ---
 

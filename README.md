@@ -1,8 +1,9 @@
 # nmon — Nvidia GPU Monitor
 
-A real-time terminal dashboard for monitoring Nvidia GPU(s) on Windows. Tracks
-core temperature, GPU memory junction temperature, memory usage, and power
-draw with up to 24 hours of history stored locally in SQLite.
+A real-time terminal dashboard for monitoring Nvidia GPU(s) on Windows.
+Tracks GPU core temperature, GPU hotspot temperature, GDDR6X memory
+junction temperature, memory usage, and power draw with up to 24 hours
+of history stored locally in SQLite.
 
 ```
  nmon  [DASHBOARD]  Temp  Power  Memory
@@ -14,14 +15,21 @@ draw with up to 24 hours of history stored locally in SQLite.
  │ NVIDIA RTX 4090     │ 72°C │  85°C   │  69°C  │████░ 60%│120 W │
  └─────────────────────┴──────┴─────────┴────────┴─────────┴──────┘
 
+                GPU Hotspot Temperature
+ ┌─────────────────────┬──────┬─────────┬────────┐
+ │ GPU                 │ Temp │ Max 24h │ Avg 1h │
+ ├─────────────────────┼──────┼─────────┼────────┤
+ │ NVIDIA RTX 4090     │ 80°C │  92°C   │  77°C  │
+ └─────────────────────┴──────┴─────────┴────────┘
+
              GPU Memory Junction Temperature
  ┌─────────────────────┬──────┬─────────┬────────┐
  │ GPU                 │ Temp │ Max 24h │ Avg 1h │
  ├─────────────────────┼──────┼─────────┼────────┤
- │ NVIDIA RTX 4090     │ 84°C │  96°C   │  81°C  │
+ │ NVIDIA RTX 4090     │ 92°C │ 100°C   │  88°C  │
  └─────────────────────┴──────┴─────────┴────────┘
 
-  Interval: 2s  │  1:Dashboard  2:Temp  3:Power  4:Memory  │  j: Junction (on)  q: Quit
+  Interval: 2s │ 1:Dash 2:Temp 3:Power 4:Mem │ h:Hotspot(on) j:Junction(on) q:Quit
 ```
 
 ## Requirements
@@ -31,10 +39,15 @@ draw with up to 24 hours of history stored locally in SQLite.
 - One or more Nvidia GPUs with drivers installed
 - `nvidia-smi` on PATH **or** `nvidia-ml-py`-compatible drivers (recommended)
 
-GPU memory junction temperature is read via NVML's field-value API
-(`NVML_FI_DEV_MEMORY_TEMP`) and is only exposed by certain Nvidia driver /
-hardware combinations — typically HBM/GDDR6X-equipped cards and data-center
-GPUs. If your card doesn't expose it, nmon silently omits that section.
+**GPU Hotspot Temperature** (hottest point on the GPU die) is read
+via NVAPI from the undocumented `NvAPI_GPU_ThermChannelGetStatus`
+function and works on essentially every modern NVIDIA consumer card.
+
+**GPU Memory Junction Temperature** is read via NVML's field-value
+API (`NVML_FI_DEV_MEMORY_TEMP`) on data-center GPUs, or via NVAPI
+channel 9 as a fallback on consumer GDDR6X cards (RTX 3080 / 3090 /
+4080 / 4090). GDDR6 cards without a dedicated junction sensor simply
+omit the section.
 
 ## Installation
 
@@ -76,7 +89,7 @@ Switch between screens with the number keys.
 
 ### 1 — Dashboard (default)
 
-The dashboard has two stacked tables.
+The dashboard has up to three stacked tables.
 
 **GPU Status** — live row per detected GPU:
 
@@ -89,20 +102,24 @@ The dashboard has two stacked tables.
 | Memory | Used / total VRAM with a fill bar and percentage |
 | Power | Current power draw in watts |
 
-**GPU Memory Junction Temperature** — shown below whenever at least one GPU
-reports a memory junction (VRAM) temperature. Each row shows the current
-junction temperature, Max 24h, and Avg 1h with the same color thresholds.
-Press `j` to toggle this section on/off. GPUs that don't support junction
-temperature are simply omitted from this section.
+**GPU Hotspot Temperature** — shown below the status table whenever at
+least one GPU exposes a die hotspot sensor. Columns are current Temp,
+Max 24h, and Avg 1h. Press `h` to toggle on/off.
 
-Both sections refresh automatically at the configured sample interval.
+**GPU Memory Junction Temperature** — shown whenever at least one GPU
+exposes a VRAM junction sensor. Same three columns. Press `j` to
+toggle on/off. GDDR6X cards (RTX 3080 / 3090 / 4080 / 4090) have it;
+GDDR6 cards typically do not.
+
+All sections refresh automatically at the configured sample interval.
 
 ### 2 — Temperature History
 
-Line chart of GPU core temperature over time. One colored series per GPU.
-For GPUs that support it, the memory junction temperature is overlaid on the
-same chart in bright red — press `j` to toggle it off. The panel footer notes
-`(junction in red)` when the overlay is active.
+Line chart of GPU core temperature over time. One colored series per
+GPU. For cards that expose them, hotspot (bright red) and memory
+junction (bright magenta) are overlaid on the same chart. Press `h`
+or `j` to toggle the respective overlays. The panel footer shows a
+legend when overlays are active.
 
 ### 3 — Power History
 
@@ -129,6 +146,7 @@ chart, formatted as `collected: Hh Mm Ss`.
 | `[` or `←` | Narrow history time window |
 | `+` | Increase sample interval |
 | `-` | Decrease sample interval |
+| `h` | Toggle GPU Hotspot Temperature display |
 | `j` | Toggle GPU Memory Junction Temperature display |
 | `q` | Quit |
 

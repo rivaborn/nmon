@@ -135,27 +135,39 @@ default_time_window_hours = 1
 
 ### Dashboard Layout
 
-The Dashboard tab shows two sections:
+The Dashboard tab shows up to three stacked sections:
 
-1. **GPU Status** — current temperature, Max 24h, Avg 1h, memory usage, and
-   power draw for every detected GPU.
-2. **GPU Memory Junction Temperature** — a second table that appears below
-   whenever at least one GPU reports a memory junction (VRAM) temperature,
-   showing current, Max 24h, and Avg 1h for each supported GPU. Hidden when
-   no GPU supports it, or when the junction display is toggled off.
+1. **GPU Status** — current core temperature, Max 24h, Avg 1h, memory
+   usage, and power draw for every detected GPU.
+2. **GPU Hotspot Temperature** — the hottest point on the GPU die.
+   Appears whenever at least one GPU exposes a hotspot sensor (all
+   modern NVIDIA consumer cards, read through NVAPI on Windows).
+   Shows current, Max 24h, and Avg 1h. Hidden when no GPU exposes it
+   or when hotspot display is toggled off with `h`.
+3. **GPU Memory Junction Temperature** — the GDDR6X memory junction
+   sensor. Appears on cards that expose it (RTX 3080 / 3090 / 4080 /
+   4090 and newer GDDR6X-equipped cards). Hidden when no GPU exposes
+   it or when junction display is toggled off with `j`.
 
 ### Temperature Tab Overlay
 
-On the Temp tab, for any GPU that supports it, the memory junction temperature
-is drawn on top of the core temperature line in a different color (bright red)
-so the two series can be compared at a glance. The panel footer notes
-`(junction in red)` when the overlay is active.
+On the Temp tab, every available temperature series is overlaid per
+GPU on the same chart:
+
+- **Core temperature** — in the GPU's base color (cyan, magenta, ...).
+- **Hotspot temperature** — in bright red when available.
+- **Memory junction temperature** — in bright magenta when available.
+
+The panel footer shows a legend (e.g. `(hotspot: bright red,
+junction: bright magenta)`) whenever either overlay is active. Each
+overlay can be independently toggled with `h` (hotspot) and `j`
+(junction).
 
 ### Chart Time Span
 
-History chart panels show the actual time span of collected data currently
-displayed, formatted as `Hh Mm Ss` (e.g. `collected: 0h 29m 0s`) alongside
-the time-window selector.
+History chart panels show the actual time span of collected data
+currently displayed, formatted as `Hh Mm Ss` (e.g. `collected: 0h 29m
+0s`) alongside the time-window selector.
 
 ### Controls
 
@@ -166,6 +178,7 @@ the time-window selector.
 | - | Decrease sampling interval |
 | [ or ← | Decrease time window (history tabs) |
 | ] or → | Increase time window (history tabs) |
+| h | Toggle GPU Hotspot Temperature on/off |
 | j | Toggle GPU Memory Junction Temperature on/off |
 | q | Quit the app |
 
@@ -194,18 +207,25 @@ The database will be recreated on the next run.
 - Verify `nvidia-smi` is on your PATH or `nvidia-ml-py` is installed
 - Check that the Nvidia driver service is running
 
-### Memory Junction Temperature Not Showing
+### Hotspot or Memory Junction Temperature Not Showing
 
-nmon tries two paths to read VRAM junction temperature, in order:
+nmon reads two extra temperatures beyond the core GPU temp: GPU
+Hotspot (the hottest point on the GPU die) and GPU Memory Junction
+(the GDDR6X VRAM sensor).
 
-1. **NVML** `NVML_FI_DEV_MEMORY_TEMP` — works on data-center GPUs (A100,
-   H100) and some workstation cards.
-2. **NVAPI** `NvAPI_GPU_ClientThermalSensors_GetValues` via `nvapi64.dll` —
-   Windows fallback used for consumer GeForce cards (RTX 3080 Ti / 3090 /
-   3090 Ti / 40-series), where NVML returns `NVML_ERROR_NOT_SUPPORTED`.
-   This is the same entry point HWiNFO and GPU-Z use.
+**Source paths:**
 
-If neither path reports the sensor, the junction section stays hidden.
+- **GPU Hotspot** — NVAPI only. Read from the undocumented
+  `NvAPI_GPU_ThermChannelGetStatus` function at channel index `1`.
+  Works on virtually all modern NVIDIA consumer cards on Windows.
+- **GPU Memory Junction** — NVML's `NVML_FI_DEV_MEMORY_TEMP` field
+  first (works on data-center GPUs like A100 / H100). On consumer
+  GeForce cards NVML returns `NVML_ERROR_NOT_SUPPORTED`, so nmon
+  falls back to NVAPI channel index `9`. GDDR6X-equipped cards (RTX
+  3080 / 3090 / 4080 / 4090) expose it; GDDR6 cards do not.
+
+If a sensor isn't exposed by any path, its dashboard section and
+chart overlay stay hidden.
 
 To see exactly what NVAPI is returning, run the diagnostic:
 
@@ -213,7 +233,7 @@ To see exactly what NVAPI is returning, run the diagnostic:
 python -m nmon.gpu.nvapi
 ```
 
-Expected output on a supported card looks like:
+Expected output on a card with hotspot and memory junction:
 
 ```
 NVAPI: found 1 GPU(s).
@@ -221,42 +241,45 @@ NVAPI: found 1 GPU(s).
 GPU 0:
   documented sensors: count=1
     [0] target=GPU            current=65C range=[0,127]
-  client thermal channels: mask=0x000000ff (Q8.8 fixed point, divide raw by 256)
+  client thermal channels: mask=0x000003ff (Q8.8 fixed point, divide raw by 256)
     sensor[ 0] =  65.03C  (raw 16648)  <-- matches GPU core
-    sensor[ 1] =  71.19C  (raw 18224)  <-- core + +6.2C (likely memory/hotspot)
+    sensor[ 1] =  71.19C  (raw 18224)  <-- [HOTSPOT used by nmon] | core +6.2C (hotter than core)
     sensor[ 2] =  65.03C  (raw 16648)  <-- matches GPU core
-    sensor[ 3] =  65.06C  (raw 16656)  <-- matches GPU core
     ...
+    sensor[ 9] =  86.00C  (raw 22016)  <-- [MEMORY JUNCTION used by nmon] | core +21.0C (hotter than core)
+
+  Channel roles on tested Ampere/Ada cards:
+    index 0 = GPU core (same as documented path)
+    index 1 = GPU hotspot (hottest point on the die)
+    index 9 = GPU memory junction (GDDR6X sensor)
 ```
 
 Interpretation guide:
 
 - **documented sensors** — always works; shows at least GPU core temp.
   If this block is empty, NVAPI isn't reachable at all (check driver).
-- **client thermal channels** — the undocumented path we use for junction
-  temperature. Each row is auto-labeled: channels that match GPU core are
-  redundant core probes; channels several degrees above core are the
-  interesting ones (memory junction, hotspot, VRM).
-- nmon currently reads channel index `1` as the memory junction. Most
-  Ampere / Ada consumer cards put memory junction at index 1, but if
-  your diagnostic shows a clearly hotter channel at a different index,
-  edit `_SENSOR_INDEX_MEMORY` in `src/nmon/gpu/nvapi.py` to match.
-- If `client thermal channels: call failed for all masks` appears, the
-  function either isn't exposed on this card or the driver expects a
-  different struct layout. Re-run the diagnostic with
-  `python -m nmon.gpu.nvapi` after a driver update, or report the
-  exact driver version so nmon's struct layout can be adjusted.
+- **client thermal channels** — each populated channel is labeled by
+  its difference from GPU core. Channels at the production indices
+  `[HOTSPOT used by nmon]` and `[MEMORY JUNCTION used by nmon]` are
+  explicitly flagged so you can verify they're reading what you
+  expect.
+- If only `mask=0x1ff` (9 channels, indices 0-8) is accepted, your
+  card doesn't expose channel 9 — typical for GDDR6 cards without a
+  dedicated junction sensor. Hotspot still works.
+- If a clearly hotter channel appears at an index other than 1 or 9,
+  update `_SENSOR_INDEX_HOTSPOT` or `_SENSOR_INDEX_MEMORY` in
+  `src/nmon/gpu/nvapi.py`.
 
-**Technical note:** nmon calls the undocumented NVAPI function
-`NvAPI_GPU_ThermChannelGetStatus` (id `0x65FE3AAD`) with a 168-byte v2
-request (`version = 0x000200a8`) and `mask = 0xFF`. Temperatures come
-back in Q8.8 fixed point — nmon divides raw values by 256 to convert
-to degrees Celsius.
+**Technical note:** nmon calls `NvAPI_GPU_ThermChannelGetStatus`
+(id `0x65FE3AAD`) with a 168-byte v2 request (`version = 0x000200a8`),
+iterating the mask from `0xFFFF` down through `0xFF / 0x1F / ...`
+until one succeeds. Temperatures come back in Q8.8 fixed point —
+divide raw values by 256.
 
 Other checks:
 
-- Press `j` to confirm the toggle is on — the status bar shows
-  `j: Junction (on)` when enabled.
+- Press `h` / `j` to confirm the toggles are on — the status bar
+  shows `h:Hotspot(on)  j:Junction(on)` when enabled.
 - nmon caches unsupported GPUs per run; restart nmon after a driver
   update if you expect support to have been added.
 

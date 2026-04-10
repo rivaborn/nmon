@@ -7,10 +7,13 @@ from nmon.models import GPUInfo, GPUSample
 class NvmlSource(GPUSource):
     def __init__(self):
         self._initialized = False
-        self._junction_unsupported: set[int] = set()
+        # Per-GPU caches so we don't re-probe unsupported paths every sample.
+        self._nvml_mem_unsupported: set[int] = set()
 
-    def _read_junction_temp(self, index: int, handle) -> float | None:
-        if index in self._junction_unsupported:
+    def _read_nvml_memory_temp(self, index: int, handle) -> float | None:
+        """Try NVML's documented memory temperature field. Works on
+        data-center GPUs, almost never on consumer GeForce."""
+        if index in self._nvml_mem_unsupported:
             return None
         try:
             values = pynvml.nvmlDeviceGetFieldValues(
@@ -20,15 +23,22 @@ class NvmlSource(GPUSource):
                 return float(values[0].value.siVal)
         except Exception:
             pass
-        # NVML didn't expose it (common on consumer GeForce cards).
-        # Fall back to NVAPI, which reads the same underlying sensor
-        # via nvapi64.dll on Windows. Returns None on non-Windows or
-        # when the NVAPI path also fails.
-        nv_temp = nvapi.read_memory_junction_temp(index)
-        if nv_temp is not None:
-            return nv_temp
-        self._junction_unsupported.add(index)
+        self._nvml_mem_unsupported.add(index)
         return None
+
+    def _read_extra_temps(
+        self, index: int, handle
+    ) -> tuple[float | None, float | None]:
+        """Returns (hotspot_c, memory_junction_c) for the given GPU.
+
+        Hotspot comes only from NVAPI (there's no NVML equivalent).
+        Memory junction tries NVML first, then falls back to NVAPI.
+        """
+        nvml_mem = self._read_nvml_memory_temp(index, handle)
+        nvapi_channels = nvapi.read_thermal_channels(index) or {}
+        hotspot = nvapi_channels.get("hotspot")
+        memory = nvml_mem if nvml_mem is not None else nvapi_channels.get("memory")
+        return hotspot, memory
 
     def is_available(self) -> bool:
         try:
@@ -64,7 +74,7 @@ class NvmlSource(GPUSource):
                 mem_used = mem.used / (1024 * 1024)
                 mem_total = mem.total / (1024 * 1024)
                 power = pynvml.nvmlDeviceGetPowerUsage(handle) / 1000.0
-                junction = self._read_junction_temp(i, handle)
+                hotspot, junction = self._read_extra_temps(i, handle)
                 samples.append(GPUSample(
                     gpu=GPUInfo(index=i, uuid=uuid, name=name),
                     timestamp=ts,
@@ -72,6 +82,7 @@ class NvmlSource(GPUSource):
                     memory_used_mib=mem_used,
                     memory_total_mib=mem_total,
                     power_draw_w=power,
+                    hotspot_temp_c=hotspot,
                     memory_junction_temp_c=junction,
                 ))
             return samples

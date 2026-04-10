@@ -21,6 +21,7 @@ class NmonApp:
         self._config = config
         self._tab = config.default_tab
         self._time_window = config.default_time_window_hours
+        self._show_hotspot = True
         self._show_junction = True
         self._quit = False
         self._lock = threading.Lock()
@@ -58,6 +59,7 @@ class NmonApp:
         with self._lock:
             tab = self._tab
             window = self._time_window
+            show_hotspot = self._show_hotspot
             show_junction = self._show_junction
         tabs_str = "  ".join(
             f"\\[{t.upper()}]" if t == tab else t.capitalize()
@@ -71,7 +73,11 @@ class NmonApp:
             if samples:
                 stats = self._build_gpu_stats(samples)
                 layout["body"].update(
-                    dashboard.build_dashboard(stats, show_junction=show_junction)
+                    dashboard.build_dashboard(
+                        stats,
+                        show_hotspot=show_hotspot,
+                        show_junction=show_junction,
+                    )
                 )
             else:
                 layout["body"].update(Panel("Waiting for data..."))
@@ -80,12 +86,17 @@ class NmonApp:
             layout["body"].update(
                 history.build_history(
                     self._storage, gpu_list, tab, window,
+                    show_hotspot=show_hotspot,
                     show_junction=show_junction,
                 )
             )
         interval = self._collector._interval
         layout["footer"].update(
-            StatusBar(interval, tab, len(self._collector.warnings), show_junction)
+            StatusBar(
+                interval, tab, len(self._collector.warnings),
+                show_hotspot=show_hotspot,
+                show_junction=show_junction,
+            )
         )
         return layout
 
@@ -120,6 +131,8 @@ class NmonApp:
                     self._collector.set_interval(self._collector._interval + 1)
                 elif key == '-':
                     self._collector.set_interval(self._collector._interval - 1)
+                elif key in ('h', 'H'):
+                    self._show_hotspot = not self._show_hotspot
                 elif key in ('j', 'J'):
                     self._show_junction = not self._show_junction
                 else:
@@ -132,15 +145,18 @@ class NmonApp:
         for sample in samples:
             result = self._storage.get_current_stats(sample.gpu.index)
             if result:
-                max_temp, avg_temp, jmax, javg = result
+                max_temp, avg_temp, hmax, havg, jmax, javg = result
             else:
                 max_temp = avg_temp = sample.temperature_c
+                hmax = havg = sample.hotspot_temp_c
                 jmax = javg = sample.memory_junction_temp_c
             stats.append(GPUStats(
                 gpu=sample.gpu,
                 current=sample,
                 max_temp_24h=max_temp,
                 avg_temp_1h=avg_temp,
+                hotspot_max_24h=hmax,
+                hotspot_avg_1h=havg,
                 junction_max_24h=jmax,
                 junction_avg_1h=javg,
             ))

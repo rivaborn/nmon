@@ -15,6 +15,7 @@ class GPUSample:
     memory_used_mib: float
     memory_total_mib: float
     power_draw_w: float
+    hotspot_temp_c: float | None = None
     memory_junction_temp_c: float | None = None
 
     @property
@@ -29,6 +30,8 @@ class GPUStats:
     current: GPUSample
     max_temp_24h: float
     avg_temp_1h: float
+    hotspot_max_24h: float | None = None
+    hotspot_avg_1h: float | None = None
     junction_max_24h: float | None = None
     junction_avg_1h: float | None = None
 
@@ -56,6 +59,7 @@ def sample_to_row(sample: GPUSample) -> dict:
         "memory_used_mib": sample.memory_used_mib,
         "memory_total_mib": sample.memory_total_mib,
         "power_draw_w": sample.power_draw_w,
+        "hotspot_temp_c": sample.hotspot_temp_c,
         "memory_junction_temp_c": sample.memory_junction_temp_c,
     }
 
@@ -68,5 +72,6 @@ def row_to_sample(row) -> GPUSample:
         memory_used_mib=row["memory_used_mib"],
         memory_total_mib=row["memory_total_mib"],
         power_draw_w=row["power_draw_w"],
+        hotspot_temp_c=row["hotspot_temp_c"],
         memory_junction_temp_c=row["memory_junction_temp_c"],
     )

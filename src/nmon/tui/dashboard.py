@@ -23,19 +23,46 @@ def build_gpu_row(stats: GPUStats, bar_width: int = 20) -> list:
         f"{s.power_draw_w:.1f} W",
     ]
 
-def build_junction_row(stats: GPUStats) -> list:
-    cur = stats.current.memory_junction_temp_c
-    jmax = stats.junction_max_24h if stats.junction_max_24h is not None else cur
-    javg = stats.junction_avg_1h if stats.junction_avg_1h is not None else cur
-    return [
-        stats.gpu.name,
-        Text(f"{cur:.0f}°C", style=_temp_style(cur)),
-        Text(f"{jmax:.0f}°C", style=_temp_style(jmax)),
-        Text(f"{javg:.0f}°C", style=_temp_style(javg)),
-    ]
+def _build_extra_temp_table(
+    stats: list[GPUStats],
+    title: str,
+    header_style: str,
+    current_attr: str,
+    max_attr: str,
+    avg_attr: str,
+) -> Table:
+    """Build a three-column temperature table (current / Max 24h / Avg 1h)
+    for either the hotspot or memory junction section. Only the GPUs
+    with a non-None current value are included."""
+    table = Table(
+        show_header=True, header_style=header_style, expand=True,
+        title=title, title_style=header_style,
+    )
+    table.add_column("GPU", no_wrap=True)
+    table.add_column("Temp", justify="right")
+    table.add_column("Max 24h", justify="right")
+    table.add_column("Avg 1h", justify="right")
+    for s in stats:
+        cur = getattr(s.current, current_attr)
+        if cur is None:
+            continue
+        smax = getattr(s, max_attr)
+        savg = getattr(s, avg_attr)
+        smax = smax if smax is not None else cur
+        savg = savg if savg is not None else cur
+        table.add_row(
+            s.gpu.name,
+            Text(f"{cur:.0f}°C", style=_temp_style(cur)),
+            Text(f"{smax:.0f}°C", style=_temp_style(smax)),
+            Text(f"{savg:.0f}°C", style=_temp_style(savg)),
+        )
+    return table
 
 def build_dashboard(
-    stats: list[GPUStats], width: int = 80, show_junction: bool = True
+    stats: list[GPUStats],
+    width: int = 80,
+    show_hotspot: bool = True,
+    show_junction: bool = True,
 ):
     if not stats:
         return Panel("No GPU data yet.", title="nmon")
@@ -50,19 +77,34 @@ def build_dashboard(
     for s in stats:
         table.add_row(*build_gpu_row(s))
 
-    junction_stats = [
-        s for s in stats if s.current.memory_junction_temp_c is not None
-    ]
-    if not show_junction or not junction_stats:
-        return table
+    sections = [table]
 
-    jtable = Table(show_header=True, header_style="bold magenta", expand=True,
-                   title="GPU Memory Junction Temperature",
-                   title_style="bold magenta")
-    jtable.add_column("GPU", no_wrap=True)
-    jtable.add_column("Temp", justify="right")
-    jtable.add_column("Max 24h", justify="right")
-    jtable.add_column("Avg 1h", justify="right")
-    for s in junction_stats:
-        jtable.add_row(*build_junction_row(s))
-    return Group(table, Text(""), jtable)
+    if show_hotspot and any(
+        s.current.hotspot_temp_c is not None for s in stats
+    ):
+        sections.append(Text(""))
+        sections.append(_build_extra_temp_table(
+            stats,
+            title="GPU Hotspot Temperature",
+            header_style="bold red",
+            current_attr="hotspot_temp_c",
+            max_attr="hotspot_max_24h",
+            avg_attr="hotspot_avg_1h",
+        ))
+
+    if show_junction and any(
+        s.current.memory_junction_temp_c is not None for s in stats
+    ):
+        sections.append(Text(""))
+        sections.append(_build_extra_temp_table(
+            stats,
+            title="GPU Memory Junction Temperature",
+            header_style="bold magenta",
+            current_attr="memory_junction_temp_c",
+            max_attr="junction_max_24h",
+            avg_attr="junction_avg_1h",
+        ))
+
+    if len(sections) == 1:
+        return table
+    return Group(*sections)

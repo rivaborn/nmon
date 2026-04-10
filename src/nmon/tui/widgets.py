@@ -110,10 +110,11 @@ class MultiSeriesChart:
 
 class StatusBar:
     def __init__(self, interval: int, tab: str, error_count: int,
-                 show_junction: bool = True):
+                 show_hotspot: bool = True, show_junction: bool = True):
         self.interval = interval
         self.tab = tab
         self.error_count = error_count
+        self.show_hotspot = show_hotspot
         self.show_junction = show_junction
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
@@ -122,9 +123,13 @@ class StatusBar:
         t.append("  │  ", style="dim")
         t.append("1:Dashboard  2:Temp  3:Power  4:Memory", style="dim")
         t.append("  │  ", style="dim")
+        hstate = "on" if self.show_hotspot else "off"
         jstate = "on" if self.show_junction else "off"
-        t.append(f"+/-: Interval  [/]: Window  j: Junction ({jstate})  q: Quit",
-                 style="dim")
+        t.append(
+            f"+/-:Interval  [/]:Window  "
+            f"h:Hotspot({hstate})  j:Junction({jstate})  q:Quit",
+            style="dim",
+        )
         if self.error_count:
             t.append(f"  │  ⚠ {self.error_count} warning(s)", style="yellow")
         yield t
