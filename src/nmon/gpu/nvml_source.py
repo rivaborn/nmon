@@ -1,5 +1,6 @@
 import time
 import pynvml
+from nmon.gpu import nvapi
 from nmon.gpu.base import GPUSource, GPUSourceError
 from nmon.models import GPUInfo, GPUSample
 
@@ -19,6 +20,13 @@ class NvmlSource(GPUSource):
                 return float(values[0].value.siVal)
         except Exception:
             pass
+        # NVML didn't expose it (common on consumer GeForce cards).
+        # Fall back to NVAPI, which reads the same underlying sensor
+        # via nvapi64.dll on Windows. Returns None on non-Windows or
+        # when the NVAPI path also fails.
+        nv_temp = nvapi.read_memory_junction_temp(index)
+        if nv_temp is not None:
+            return nv_temp
         self._junction_unsupported.add(index)
         return None
 

@@ -196,12 +196,54 @@ The database will be recreated on the next run.
 
 ### Memory Junction Temperature Not Showing
 
-- The field-value API returns `NVML_ERROR_NOT_SUPPORTED` on GPUs whose driver
-  or firmware doesn't expose memory junction temperature. This is normal.
-- Press `j` to confirm the toggle is on — check the status bar for
-  `j: Junction (on)`.
-- nmon caches unsupported GPUs per run; restart nmon after a driver update
-  if you expect support to have been added.
+nmon tries two paths to read VRAM junction temperature, in order:
+
+1. **NVML** `NVML_FI_DEV_MEMORY_TEMP` — works on data-center GPUs (A100,
+   H100) and some workstation cards.
+2. **NVAPI** `NvAPI_GPU_ClientThermalSensors_GetValues` via `nvapi64.dll` —
+   Windows fallback used for consumer GeForce cards (RTX 3080 Ti / 3090 /
+   3090 Ti / 40-series), where NVML returns `NVML_ERROR_NOT_SUPPORTED`.
+   This is the same entry point HWiNFO and GPU-Z use.
+
+If neither path reports the sensor, the junction section stays hidden.
+
+To see exactly what NVAPI is returning, run the diagnostic:
+
+```bash
+python -m nmon.gpu.nvapi
+```
+
+Expected output on a supported card looks like:
+
+```
+NVAPI: found 1 GPU(s).
+NVAPI: client thermal sensors version tag = 0x000200a8 (size=168)
+
+GPU 0:
+  documented sensors: count=1
+    [0] target=GPU            current=65°C range=[0,127]
+  client thermal sensors: mask=0x00000003
+    sensor[ 0] =   65.0°C   (raw 65000)
+    sensor[ 1] =   82.0°C   (raw 82000)   ← memory junction
+```
+
+Interpretation guide:
+
+- **documented sensors** — always works; shows at least GPU core temp.
+  If this block is empty, NVAPI isn't reachable at all (check driver).
+- **client thermal sensors** — the undocumented path we use for junction.
+  If this reports "call failed", either your card doesn't expose memory
+  temp or the struct layout doesn't match your driver.
+- If populated but the memory sensor is at a different index than `[1]`,
+  the `_SENSOR_INDEX_MEMORY` constant in `src/nmon/gpu/nvapi.py` needs to
+  be updated for your card.
+
+Other checks:
+
+- Press `j` to confirm the toggle is on — the status bar shows
+  `j: Junction (on)` when enabled.
+- nmon caches unsupported GPUs per run; restart nmon after a driver
+  update if you expect support to have been added.
 
 ### App Crashes on Start
 
