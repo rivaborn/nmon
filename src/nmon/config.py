@@ -15,6 +15,10 @@ DEFAULTS = {
         "temp_threshold_c": 95.0,
         "show_temp_threshold": True,
     },
+    "ollama": {
+        "enabled": True,
+        "url": "http://localhost:11434",
+    },
 }
 
 class ConfigError(ValueError): pass
@@ -32,7 +36,7 @@ def _validate(cfg: dict) -> None:
     if cfg["storage"]["retention_hours"] < 1:
         raise ConfigError("retention_hours must be >= 1")
     d = cfg["display"]
-    if d["default_tab"] not in {"dashboard", "temp", "power", "memory"}:
+    if d["default_tab"] not in {"dashboard", "temp", "power", "memory", "llm"}:
         raise ConfigError(f"invalid default_tab: {d['default_tab']}")
     if d["default_time_window_hours"] not in {1, 4, 12, 24}:
         raise ConfigError("default_time_window_hours must be 1, 4, 12, or 24")
@@ -51,7 +55,7 @@ def load_config(path: str | None = None) -> AppConfig:
             raw = tomllib.load(f)
     cfg = _apply_defaults(raw)
     _validate(cfg)
-    s, st, d = cfg["sampling"], cfg["storage"], cfg["display"]
+    s, st, d, o = cfg["sampling"], cfg["storage"], cfg["display"], cfg["ollama"]
     return AppConfig(
         interval_seconds=s["interval_seconds"],
         min_interval=s["min_interval"],
@@ -62,4 +66,6 @@ def load_config(path: str | None = None) -> AppConfig:
         default_time_window_hours=d["default_time_window_hours"],
         default_temp_threshold_c=float(d["temp_threshold_c"]),
         default_show_temp_threshold=bool(d["show_temp_threshold"]),
+        ollama_enabled=bool(o["enabled"]),
+        ollama_url=str(o["url"]),
     )

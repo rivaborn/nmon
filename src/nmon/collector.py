@@ -4,12 +4,19 @@ import collections
 import logging
 from nmon.gpu.base import GPUSource, GPUSourceError
 from nmon.storage import Storage, StorageError
-from nmon.models import GPUSample, AppConfig
+from nmon.models import GPUSample, AppConfig, OllamaSample
+from nmon.ollama import OllamaClient
 
 log = logging.getLogger(__name__)
 
 class Collector:
-    def __init__(self, source: GPUSource, storage: Storage, config: AppConfig):
+    def __init__(
+        self,
+        source: GPUSource,
+        storage: Storage,
+        config: AppConfig,
+        ollama: OllamaClient | None = None,
+    ):
         self._source = source
         self._storage = storage
         self._interval = config.interval_seconds
@@ -17,6 +24,8 @@ class Collector:
         self._max = config.max_interval
         self._retention = config.retention_hours
         self._latest: list[GPUSample] | None = None
+        self._ollama = ollama
+        self._latest_ollama: OllamaSample | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -36,6 +45,10 @@ class Collector:
         with self._lock:
             return self._latest
 
+    def get_latest_ollama(self) -> OllamaSample | None:
+        with self._lock:
+            return self._latest_ollama
+
     def set_interval(self, seconds: int) -> None:
         with self._lock:
             self._interval = max(self._min, min(self._max, seconds))
@@ -53,7 +66,6 @@ class Collector:
                 self._last_gpu_count = count
                 with self._lock:
                     self._latest = samples
-                    interval = self._interval
                 self._storage.insert_samples(samples)
                 self._storage.prune_old(self._retention)
             except GPUSourceError as e:
@@ -62,7 +74,38 @@ class Collector:
                 log.error("Storage error: %s", e)
             except Exception as e:
                 log.error("Unexpected error in collector: %s", e)
+
+            if self._ollama is not None:
+                try:
+                    self._poll_ollama()
+                except Exception as e:
+                    log.warning("Ollama poll error: %s", e)
+
             with self._lock:
                 interval = self._interval
             elapsed = time.monotonic() - t0
             self._stop.wait(max(0.0, interval - elapsed))
+
+    def _poll_ollama(self) -> None:
+        status = self._ollama.get_running() if self._ollama else None
+        if status is None:
+            with self._lock:
+                self._latest_ollama = None
+            return
+        sample = OllamaSample(
+            timestamp=time.time(),
+            running=status.running,
+            model_name=status.model_name,
+            size_bytes=status.size_bytes,
+            size_vram_bytes=status.size_vram_bytes,
+            gpu_pct=status.gpu_pct,
+            cpu_pct=status.cpu_pct,
+        )
+        with self._lock:
+            self._latest_ollama = sample
+        if status.running:
+            try:
+                self._storage.insert_ollama_sample(sample)
+                self._storage.prune_old_ollama(self._retention)
+            except StorageError as e:
+                log.error("Ollama storage error: %s", e)

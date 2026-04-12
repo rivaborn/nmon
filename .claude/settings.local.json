@@ -8,7 +8,8 @@
       "Bash(python -m pytest tests/test_tui_widgets.py tests/test_tui_history.py tests/test_tui_dashboard.py -q --no-header)",
       "Bash(python -m nmon.gpu.nvapi)",
       "Bash(python -c \"from nmon.gpu import nvapi; from nmon.gpu.nvml_source import NvmlSource; print\\('import OK'\\)\")",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(xargs grep:*)"
     ]
   }
 }

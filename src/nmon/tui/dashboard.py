@@ -2,7 +2,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 from rich.console import Group
-from nmon.models import GPUStats
+from nmon.models import GPUStats, OllamaSample
 from nmon.tui.widgets import MemoryBar
 
 def _temp_style(temp: float) -> str:
@@ -58,11 +58,52 @@ def _build_extra_temp_table(
         )
     return table
 
+def _format_size_bytes(n: int) -> str:
+    if n <= 0:
+        return "—"
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    f = float(n)
+    i = 0
+    while f >= 1024 and i < len(units) - 1:
+        f /= 1024
+        i += 1
+    return f"{f:.2f} {units[i]}"
+
+def build_ollama_table(sample: OllamaSample) -> Table:
+    """Ollama Server section. Called from build_dashboard when an
+    Ollama server is detected. GPU/CPU percentages are colored green
+    when the model lives entirely in VRAM and red when any part has
+    spilled over to system RAM (GPU offloading)."""
+    table = Table(
+        show_header=True, header_style="bold cyan", expand=True,
+        title="Ollama Server", title_style="bold cyan",
+    )
+    table.add_column("Model", no_wrap=True)
+    table.add_column("Size", justify="right")
+    table.add_column("GPU %", justify="right")
+    table.add_column("CPU %", justify="right")
+    if not sample.running:
+        table.add_row(
+            Text("(no model loaded)", style="dim"),
+            "—", "—", "—",
+        )
+        return table
+    offloading = sample.gpu_pct < 100.0
+    pct_style = "red" if offloading else "green"
+    table.add_row(
+        sample.model_name or "(unknown)",
+        _format_size_bytes(sample.size_bytes),
+        Text(f"{sample.gpu_pct:.0f}%", style=pct_style),
+        Text(f"{sample.cpu_pct:.0f}%", style=pct_style),
+    )
+    return table
+
 def build_dashboard(
     stats: list[GPUStats],
     width: int = 80,
     show_hotspot: bool = True,
     show_junction: bool = True,
+    ollama: OllamaSample | None = None,
 ):
     if not stats:
         return Panel("No GPU data yet.", title="nmon")
@@ -104,6 +145,10 @@ def build_dashboard(
             max_attr="junction_max_24h",
             avg_attr="junction_avg_1h",
         ))
+
+    if ollama is not None:
+        sections.append(Text(""))
+        sections.append(build_ollama_table(ollama))
 
     if len(sections) == 1:
         return table

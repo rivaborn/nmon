@@ -15,3 +15,10 @@ default_time_window_hours = 1
 # the DB and override these values on the next startup.
 temp_threshold_c = 95.0
 show_temp_threshold = true
+
+[ollama]
+# Set enabled=false to skip Ollama detection entirely. When enabled, nmon
+# probes this URL at startup and (if reachable) polls /api/ps every sampling
+# interval for the currently loaded model and its GPU/CPU split.
+enabled = true
+url = "http://localhost:11434"

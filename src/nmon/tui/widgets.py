@@ -167,7 +167,7 @@ class StatusBar:
         t = Text()
         t.append(f" {self.interval}s", style="bold")
         t.append("  │  ", style="dim")
-        t.append("1:Dash 2:Temp 3:Pwr 4:Mem", style="dim")
+        t.append("1:Dash 2:Temp 3:Pwr 4:Mem 5:LLM", style="dim")
         t.append("  │  ", style="dim")
         hstate = "on" if self.show_hotspot else "off"
         jstate = "on" if self.show_junction else "off"

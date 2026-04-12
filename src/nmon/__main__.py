@@ -6,6 +6,7 @@ from nmon.gpu.nvml_source import NvmlSource
 from nmon.gpu.smi_source import SmiSource
 from nmon.storage import Storage
 from nmon.collector import Collector
+from nmon.ollama import OllamaClient
 from nmon.tui.app import NmonApp
 
 console = Console()
@@ -46,7 +47,20 @@ def main() -> None:
         sys.exit(1)
 
     storage = Storage(config.db_path)
-    collector = Collector(source, storage, config)
+
+    ollama_client: OllamaClient | None = None
+    if config.ollama_enabled:
+        probe = OllamaClient(config.ollama_url)
+        if probe.ping():
+            console.print(f"[green]Ollama detected at {config.ollama_url}[/green]")
+            ollama_client = probe
+        else:
+            console.print(
+                f"[dim]No Ollama server at {config.ollama_url} "
+                "(LLM tab and dashboard section disabled)[/dim]"
+            )
+
+    collector = Collector(source, storage, config, ollama=ollama_client)
     app = NmonApp(collector, storage, config)
     try:
         app.run()

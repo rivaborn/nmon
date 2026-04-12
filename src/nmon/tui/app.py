@@ -10,10 +10,11 @@ from nmon.collector import Collector
 from nmon.storage import Storage
 from nmon.models import AppConfig, GPUStats
 from nmon.state import state_path_for_db, load_state, save_state
-from nmon.tui import dashboard, history
+from nmon.tui import dashboard, history, llm
 from nmon.tui.widgets import StatusBar
 
-TABS = ["dashboard", "temp", "power", "memory"]
+TABS = ["dashboard", "temp", "power", "memory", "llm"]
+OFFLOAD_BANNER_HOLD_SECONDS = 1.0
 
 TEMP_THRESHOLD_MIN = 0.0
 TEMP_THRESHOLD_MAX = 150.0
@@ -47,6 +48,10 @@ class NmonApp:
         self._quit = False
         self._lock = threading.Lock()
         self._redraw = threading.Event()
+        # Monotonic deadline: banner stays visible until this time.
+        # Bumped whenever we observe offloading, held for at least
+        # OFFLOAD_BANNER_HOLD_SECONDS so it never flickers at fast sample rates.
+        self._offload_until: float = 0.0
 
     def _persist_state(self) -> None:
         """Snapshot caller holds self._lock."""
@@ -64,7 +69,14 @@ class NmonApp:
         with Live(self._render(), screen=True, auto_refresh=False) as live:
             live.refresh()
             while not self._quit:
-                self._redraw.wait(timeout=max(0.5, self._config.interval_seconds / 2))
+                # Cap the wait whenever the offload banner is up so it
+                # disappears promptly once the hold window elapses,
+                # even on long sampling intervals.
+                timeout = max(0.5, self._config.interval_seconds / 2)
+                remaining = self._offload_until - time.monotonic()
+                if remaining > 0:
+                    timeout = min(timeout, max(0.1, remaining))
+                self._redraw.wait(timeout=timeout)
                 self._redraw.clear()
                 try:
                     live.update(self._render())
@@ -78,12 +90,6 @@ class NmonApp:
                     live.refresh()
 
     def _render(self):
-        layout = Layout()
-        layout.split_column(
-            Layout(name="header", size=1),
-            Layout(name="body"),
-            Layout(name="footer", size=1),
-        )
         with self._lock:
             tab = self._tab
             window = self._time_window
@@ -91,6 +97,34 @@ class NmonApp:
             show_junction = self._show_junction
             temp_threshold_c = self._temp_threshold_c
             show_temp_threshold = self._show_temp_threshold
+
+        ollama_sample = self._collector.get_latest_ollama()
+        now_mono = time.monotonic()
+        if ollama_sample is not None and ollama_sample.offloading:
+            self._offload_until = now_mono + OFFLOAD_BANNER_HOLD_SECONDS
+        show_banner = now_mono < self._offload_until
+
+        layout = Layout()
+        if show_banner:
+            layout.split_column(
+                Layout(name="banner", size=1),
+                Layout(name="header", size=1),
+                Layout(name="body"),
+                Layout(name="footer", size=1),
+            )
+            banner = Text(
+                " ⚠  GPU OFFLOADING — Ollama model is partially in CPU/system RAM ",
+                style="black on dark_orange",
+                justify="center",
+            )
+            layout["banner"].update(banner)
+        else:
+            layout.split_column(
+                Layout(name="header", size=1),
+                Layout(name="body"),
+                Layout(name="footer", size=1),
+            )
+
         tabs_str = "  ".join(
             f"\\[{t.upper()}]" if t == tab else t.capitalize()
             for t in TABS
@@ -107,10 +141,15 @@ class NmonApp:
                         stats,
                         show_hotspot=show_hotspot,
                         show_junction=show_junction,
+                        ollama=ollama_sample,
                     )
                 )
             else:
                 layout["body"].update(Panel("Waiting for data..."))
+        elif tab == "llm":
+            layout["body"].update(
+                llm.build_llm_history(self._storage, window)
+            )
         else:
             gpu_list = [s.gpu for s in samples] if samples else []
             layout["body"].update(
@@ -152,10 +191,12 @@ class NmonApp:
             changed = True
             persist = False
             with self._lock:
-                if key in ('q', '\x03'):          # q or Ctrl+C
+                if key in ('q', '\x03', '\x11'):   # q, Ctrl+C, Ctrl+Q
                     self._quit = True
-                elif key in ('1', '2', '3', '4'):
-                    self._tab = TABS[int(key) - 1]
+                elif key in ('1', '2', '3', '4', '5'):
+                    idx = int(key) - 1
+                    if idx < len(TABS):
+                        self._tab = TABS[idx]
                 elif key in ('[', '\xe0K'):        # [ or left arrow
                     idx = TIME_WINDOWS.index(self._time_window)
                     self._time_window = TIME_WINDOWS[max(0, idx - 1)]

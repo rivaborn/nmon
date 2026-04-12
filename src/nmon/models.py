@@ -40,6 +40,21 @@ class HistoryRow(TypedDict):
     value: float
 
 @dataclass
+class OllamaSample:
+    """One point of Ollama server telemetry, stored in ollama_samples."""
+    timestamp: float
+    running: bool
+    model_name: str | None
+    size_bytes: int
+    size_vram_bytes: int
+    gpu_pct: float
+    cpu_pct: float
+
+    @property
+    def offloading(self) -> bool:
+        return self.running and self.gpu_pct < 100.0
+
+@dataclass
 class AppConfig:
     interval_seconds: int
     min_interval: int
@@ -50,6 +65,8 @@ class AppConfig:
     default_time_window_hours: int
     default_temp_threshold_c: float = 95.0
     default_show_temp_threshold: bool = True
+    ollama_enabled: bool = True
+    ollama_url: str = "http://localhost:11434"
 
 def sample_to_row(sample: GPUSample) -> dict:
     return {

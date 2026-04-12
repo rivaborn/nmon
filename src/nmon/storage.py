@@ -2,7 +2,7 @@ import sqlite3
 import time
 from typing import Literal
 
-from nmon.models import GPUSample, HistoryRow, sample_to_row, row_to_sample
+from nmon.models import GPUSample, HistoryRow, OllamaSample, sample_to_row, row_to_sample
 
 class StorageError(RuntimeError):
     pass
@@ -31,6 +31,18 @@ class Storage:
             );
             CREATE INDEX IF NOT EXISTS idx_samples_gpu_time
                 ON gpu_samples (gpu_index, timestamp);
+            CREATE TABLE IF NOT EXISTS ollama_samples (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp       REAL    NOT NULL,
+                running         INTEGER NOT NULL,
+                model_name      TEXT,
+                size_bytes      INTEGER NOT NULL,
+                size_vram_bytes INTEGER NOT NULL,
+                gpu_pct         REAL    NOT NULL,
+                cpu_pct         REAL    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ollama_time
+                ON ollama_samples (timestamp);
         """)
         # Migrate legacy schemas. Earlier nmon versions stored GPU
         # hotspot temperature in a column mislabelled memory_junction_temp_c.
@@ -133,6 +145,49 @@ class Storage:
             f"WHERE gpu_index = ? AND timestamp >= ? AND {metric} IS NOT NULL "
             "ORDER BY timestamp ASC",
             (gpu_index, since)
+        )
+        return [HistoryRow(timestamp=r[0], value=r[1]) for r in cur.fetchall()]
+
+    # ---- Ollama ------------------------------------------------------
+
+    def insert_ollama_sample(self, sample: OllamaSample) -> None:
+        try:
+            self._conn.execute(
+                "INSERT INTO ollama_samples (timestamp,running,model_name,"
+                "size_bytes,size_vram_bytes,gpu_pct,cpu_pct) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (
+                    sample.timestamp,
+                    1 if sample.running else 0,
+                    sample.model_name,
+                    sample.size_bytes,
+                    sample.size_vram_bytes,
+                    sample.gpu_pct,
+                    sample.cpu_pct,
+                ),
+            )
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            raise StorageError(str(e)) from e
+
+    def prune_old_ollama(self, retention_hours: int) -> int:
+        cutoff = time.time() - retention_hours * 3600
+        cur = self._conn.execute(
+            "DELETE FROM ollama_samples WHERE timestamp < ?", (cutoff,)
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def get_ollama_history(
+        self,
+        metric: Literal["gpu_pct", "cpu_pct"],
+        since: float,
+    ) -> list[HistoryRow]:
+        cur = self._conn.execute(
+            f"SELECT timestamp, {metric} FROM ollama_samples "
+            f"WHERE timestamp >= ? AND running = 1 "
+            "ORDER BY timestamp ASC",
+            (since,),
         )
         return [HistoryRow(timestamp=r[0], value=r[1]) for r in cur.fetchall()]
 
