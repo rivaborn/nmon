@@ -125,8 +125,10 @@ class NmonApp:
                 Layout(name="footer", size=1),
             )
 
+        def _tab_label(t: str) -> str:
+            return "LLM" if t == "llm" else t.capitalize()
         tabs_str = "  ".join(
-            f"\\[{t.upper()}]" if t == tab else t.capitalize()
+            f"\\[{t.upper()}]" if t == tab else _tab_label(t)
             for t in TABS
         )
         layout["header"].update(

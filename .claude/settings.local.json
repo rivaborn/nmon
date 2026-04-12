@@ -9,7 +9,8 @@
       "Bash(python -m nmon.gpu.nvapi)",
       "Bash(python -c \"from nmon.gpu import nvapi; from nmon.gpu.nvml_source import NvmlSource; print\\('import OK'\\)\")",
       "Bash(ls:*)",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(PYTHONIOENCODING=utf-8 python:*)"
     ]
   }
 }

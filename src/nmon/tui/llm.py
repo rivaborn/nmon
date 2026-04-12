@@ -34,12 +34,14 @@ def build_llm_history(
     all_timestamps.extend(r["timestamp"] for r in gpu_rows)
     all_timestamps.extend(r["timestamp"] for r in cpu_rows)
 
-    gpu_group = ([(gpu_rows, GPU_COLOR)], "GPU Use")
-    cpu_group = ([(cpu_rows, CPU_COLOR)], "CPU Use")
+    combined = (
+        [(gpu_rows, GPU_COLOR), (cpu_rows, CPU_COLOR)],
+        "GPU Use vs CPU Use",
+    )
 
     chart = MultiSeriesChart(
-        [gpu_group, cpu_group],
-        width - 10, height, "%",
+        [combined],
+        width - 10, height * 2, "%",
         format_time_window_tabs(time_window_hours),
     )
 
