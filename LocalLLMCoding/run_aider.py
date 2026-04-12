@@ -2,6 +2,13 @@
 """
 Parses aidercommands.md and runs aider --message for each step automatically.
 
+The markdown file is expected to live alongside this script (e.g. in
+``LocalLLMCoding/``). Aider itself is invoked from the current working
+directory — so run this from the repo root you want aider to edit, e.g.::
+
+    cd C:\\Coding\\nmonClaude
+    python .\\LocalLLMCoding\\run_aider.py
+
 Usage:
     python run_aider.py                    # run all steps
     python run_aider.py --from-step 5     # resume from step 5
@@ -13,6 +20,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def parse_steps(md_path: str) -> list[dict]:
@@ -95,8 +104,8 @@ def run_step(step: dict, model: str | None, dry_run: bool) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run aider steps from aidercommands.md")
-    parser.add_argument('file', nargs='?', default='aidercommands.md',
-                        help="Markdown file to process (default: aidercommands.md)")
+    parser.add_argument('file', nargs='?', default=None,
+                        help="Markdown file to process (default: aidercommands.md next to this script)")
     parser.add_argument('--from-step', type=int, default=1, metavar='N',
                         help="Start from step N (useful for resuming after a failure)")
     parser.add_argument('--only-step', type=int, metavar='N',
@@ -107,8 +116,20 @@ def main() -> None:
                         help="Parse and preview steps without running aider")
     args = parser.parse_args()
 
-    steps = parse_steps(args.file)
-    print(f"Parsed {len(steps)} steps from {args.file}")
+    # Default markdown path is resolved relative to the script directory so
+    # the script can be launched from any CWD (typically the repo root) and
+    # still find its companion aidercommands.md.
+    if args.file is None:
+        md_path = SCRIPT_DIR / 'aidercommands.md'
+    else:
+        md_path = Path(args.file)
+        if not md_path.is_absolute() and not md_path.exists():
+            script_relative = SCRIPT_DIR / md_path
+            if script_relative.exists():
+                md_path = script_relative
+
+    steps = parse_steps(str(md_path))
+    print(f"Parsed {len(steps)} steps from {md_path}")
 
     if args.dry_run:
         for s in steps:
@@ -134,7 +155,10 @@ def main() -> None:
 
     if failed_at:
         print(f"\n[STOPPED] Failed at step {failed_at}.")
-        print(f"  Fix the issue then resume with: python run_aider.py --from-step {failed_at}")
+        print(
+            f"  Fix the issue then resume with: "
+            f"python {Path(sys.argv[0]).as_posix()} --from-step {failed_at}"
+        )
         sys.exit(1)
     else:
         print(f"\n{'='*60}")

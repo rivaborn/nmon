@@ -10,7 +10,13 @@
       "Bash(python -c \"from nmon.gpu import nvapi; from nmon.gpu.nvml_source import NvmlSource; print\\('import OK'\\)\")",
       "Bash(ls:*)",
       "Bash(xargs grep:*)",
-      "Bash(PYTHONIOENCODING=utf-8 python:*)"
+      "Bash(PYTHONIOENCODING=utf-8 python:*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('LocalLLMCoding/run_aider.py'\\).read\\(\\)\\); print\\('parse ok'\\)\")",
+      "Bash(python ./LocalLLMCoding/run_aider.py --dry-run)",
+      "Bash(pip show:*)",
+      "Bash(python -c \"import nmon; print\\(nmon.__file__\\)\")",
+      "Read(//c/Coding/**)",
+      "Read(//c/Python/Python312/Lib/site-packages/**)"
     ]
   }
 }

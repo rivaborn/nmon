@@ -43,6 +43,7 @@ def build_llm_history(
         [combined],
         width - 10, height * 2, "%",
         format_time_window_tabs(time_window_hours),
+        thresholds=[0.0, 100.0],
     )
 
     if all_timestamps:

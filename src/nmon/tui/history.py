@@ -80,7 +80,7 @@ def build_history(
     chart = MultiSeriesChart(
         groups, width - 10, height, cfg["unit"],
         format_time_window_tabs(time_window_hours),
-        threshold=threshold,
+        thresholds=threshold,
         threshold_color=THRESHOLD_COLOR,
     )
     if all_timestamps:

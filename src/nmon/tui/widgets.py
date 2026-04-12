@@ -31,20 +31,25 @@ class BrailleChart:
     axis. When cells from multiple series land on the same column, the series
     drawn last wins for that cell.
 
-    `threshold`, when given, draws a horizontal line across the chart at
-    that Y value. The Y range is expanded to include the threshold so
-    the line is always visible. Data dots win on cells where they
-    collide with the threshold line.
+    `thresholds`, when given, draws one horizontal line per Y value across
+    the chart. The Y range is expanded to include every threshold so each
+    line is always visible. Data dots win on cells where they collide with
+    a threshold line. A single float is also accepted for convenience.
     """
     def __init__(self, series: list[tuple[list[HistoryRow], str]],
                  width: int, height: int, y_label: str,
-                 threshold: float | None = None,
+                 thresholds: float | list[float] | None = None,
                  threshold_color: str = "bright_white"):
         self.series = series
         self.width = width
         self.height = height
         self.y_label = y_label
-        self.threshold = threshold
+        if thresholds is None:
+            self.thresholds: list[float] = []
+        elif isinstance(thresholds, (int, float)):
+            self.thresholds = [float(thresholds)]
+        else:
+            self.thresholds = [float(t) for t in thresholds]
         self.threshold_color = threshold_color
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
@@ -53,9 +58,9 @@ class BrailleChart:
             lo, hi = min(all_values), max(all_values)
         else:
             lo, hi = 0.0, 0.0
-        if self.threshold is not None:
-            lo = min(lo, self.threshold)
-            hi = max(hi, self.threshold)
+        for t in self.thresholds:
+            lo = min(lo, t)
+            hi = max(hi, t)
         rng = (hi - lo) or 1.0
 
         grids: list[tuple[list[list[int]], str]] = []
@@ -69,18 +74,21 @@ class BrailleChart:
                     v = values[idx]
                     norm = (v - lo) / rng * (self.height * 4 - 1)
                     row_idx = self.height - 1 - int(norm // 4)
-                    dot_row = int(norm % 4)
+                    dot_row = 3 - int(norm % 4)
                     if 0 <= row_idx < self.height:
                         grid[row_idx][col] |= BRAILLE[dot_row][0]
             grids.append((grid, color))
 
-        threshold_row_idx: int | None = None
-        threshold_mask = 0
-        if self.threshold is not None:
-            norm = (self.threshold - lo) / rng * (self.height * 4 - 1)
-            threshold_row_idx = self.height - 1 - int(norm // 4)
-            dot_row = int(norm % 4)
-            threshold_mask = BRAILLE[dot_row][0] | BRAILLE[dot_row][1]
+        threshold_row_masks: dict[int, int] = {}
+        for t in self.thresholds:
+            norm = (t - lo) / rng * (self.height * 4 - 1)
+            row_idx = self.height - 1 - int(norm // 4)
+            dot_row = 3 - int(norm % 4)
+            if 0 <= row_idx < self.height:
+                mask = BRAILLE[dot_row][0] | BRAILLE[dot_row][1]
+                threshold_row_masks[row_idx] = (
+                    threshold_row_masks.get(row_idx, 0) | mask
+                )
 
         mid = (lo + hi) / 2
         axis_labels = {
@@ -92,6 +100,7 @@ class BrailleChart:
             line = Text()
             ax_label = axis_labels.get(r, "")
             line.append(f"{ax_label:>4} │", style="dim")
+            threshold_mask = threshold_row_masks.get(r, 0)
             for col in range(self.width):
                 data_mask = 0
                 data_color = None
@@ -99,16 +108,15 @@ class BrailleChart:
                     if grid[r][col]:
                         data_mask = grid[r][col]
                         data_color = color
-                is_threshold_row = (r == threshold_row_idx)
                 if data_color:
-                    if is_threshold_row:
+                    if threshold_mask:
                         line.append(
                             chr(0x2800 | data_mask | threshold_mask),
                             style=data_color,
                         )
                     else:
                         line.append(chr(0x2800 | data_mask), style=data_color)
-                elif is_threshold_row:
+                elif threshold_mask:
                     line.append(
                         chr(0x2800 | threshold_mask),
                         style=self.threshold_color,
@@ -129,14 +137,14 @@ class MultiSeriesChart:
     def __init__(self,
                  groups: list[tuple[list[tuple[list[HistoryRow], str]], str]],
                  width: int, height: int, y_label: str, time_window_label: str,
-                 threshold: float | None = None,
+                 thresholds: float | list[float] | None = None,
                  threshold_color: str = "bright_white"):
         self.groups = groups
         self.width = width
         self.height = height
         self.y_label = y_label
         self.time_window_label = time_window_label
-        self.threshold = threshold
+        self.thresholds = thresholds
         self.threshold_color = threshold_color
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
@@ -145,7 +153,7 @@ class MultiSeriesChart:
             yield Text(f"  {label}", style=primary_color)
             chart = BrailleChart(
                 series_list, self.width, self.height, self.y_label,
-                threshold=self.threshold,
+                thresholds=self.thresholds,
                 threshold_color=self.threshold_color,
             )
             yield from chart.__rich_console__(console, options)

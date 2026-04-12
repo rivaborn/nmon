@@ -15,6 +15,7 @@ from nmon.tui.widgets import StatusBar
 
 TABS = ["dashboard", "temp", "power", "memory", "llm"]
 OFFLOAD_BANNER_HOLD_SECONDS = 1.0
+OFFLOAD_HEAVY_PCT = 5.0
 
 TEMP_THRESHOLD_MIN = 0.0
 TEMP_THRESHOLD_MAX = 150.0
@@ -52,6 +53,10 @@ class NmonApp:
         # Bumped whenever we observe offloading, held for at least
         # OFFLOAD_BANNER_HOLD_SECONDS so it never flickers at fast sample rates.
         self._offload_until: float = 0.0
+        # Peak offload percentage observed during the current banner
+        # session. Drives the orange→red color switch so a tick with no
+        # fresh Ollama sample doesn't downgrade the warning color.
+        self._offload_peak_pct: float = 0.0
 
     def _persist_state(self) -> None:
         """Snapshot caller holds self._lock."""
@@ -101,8 +106,17 @@ class NmonApp:
         ollama_sample = self._collector.get_latest_ollama()
         now_mono = time.monotonic()
         if ollama_sample is not None and ollama_sample.offloading:
+            # Fresh banner session → reset peak before folding in this sample.
+            if now_mono >= self._offload_until:
+                self._offload_peak_pct = 0.0
             self._offload_until = now_mono + OFFLOAD_BANNER_HOLD_SECONDS
+            self._offload_peak_pct = max(
+                self._offload_peak_pct,
+                100.0 - ollama_sample.gpu_pct,
+            )
         show_banner = now_mono < self._offload_until
+        if not show_banner:
+            self._offload_peak_pct = 0.0
 
         layout = Layout()
         if show_banner:
@@ -112,9 +126,11 @@ class NmonApp:
                 Layout(name="body"),
                 Layout(name="footer", size=1),
             )
+            heavy = self._offload_peak_pct > OFFLOAD_HEAVY_PCT
+            banner_style = "white on red" if heavy else "black on dark_orange"
             banner = Text(
                 " ⚠  GPU OFFLOADING — Ollama model is partially in CPU/system RAM ",
-                style="black on dark_orange",
+                style=banner_style,
                 justify="center",
             )
             layout["banner"].update(banner)
