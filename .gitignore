@@ -3,6 +3,7 @@
 
 # Runtime / debug
 nmon.db
+nmon.db-*
 nmon_debug.log
 
 # Python
