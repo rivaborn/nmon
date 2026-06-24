@@ -41,7 +41,7 @@ def test_braille_chart():
         {"timestamp": 4.0, "value": 40.0},
         {"timestamp": 5.0, "value": 50.0},
     ]
-    widget = BrailleChart(data, width=10, height=5, label="Temp", color="red", y_label="°C")
+    widget = BrailleChart([(data, "red")], width=10, height=5, y_label="°C")
     console = Console(file=StringIO(), width=80)
     with console.capture() as cap:
         console.print(widget)
@@ -53,12 +53,13 @@ def test_braille_chart():
     # Check for braille characters
     assert "│" in output  # Axis line
     assert "─" in output  # Footer line
-    # Check for color indicator in output
-    assert "red" in output.lower()
+    # Color rides on the series tuple; rich doesn't emit style names as text
+    # when capturing to a non-terminal buffer, so assert on widget state.
+    assert widget.series[0][1] == "red"
 
 def test_braille_chart_empty_data():
     """Test BrailleChart with empty data"""
-    widget = BrailleChart([], width=10, height=5, label="Temp", color="red", y_label="°C")
+    widget = BrailleChart([], width=10, height=5, y_label="°C")
     console = Console(file=StringIO(), width=80)
     with console.capture() as cap:
         console.print(widget)
@@ -81,9 +82,9 @@ def test_multi_series_chart():
         {"timestamp": 3.0, "value": 120.0},
     ]
     widget = MultiSeriesChart(
-        series=[
-            (temp_data, "Temperature", "red"),
-            (power_data, "Power", "yellow"),
+        groups=[
+            ([(temp_data, "red")], "Temperature"),
+            ([(power_data, "yellow")], "Power"),
         ],
         width=10,
         height=5,
@@ -95,38 +96,39 @@ def test_multi_series_chart():
         console.print(widget)
     output = cap.get()
 
-    # Check for both series labels
+    # Each group's label renders as plain text
     assert "Temperature" in output
     assert "Power" in output
-    # Check for colors
-    assert "red" in output.lower()
-    assert "yellow" in output.lower()
     # Check for axis elements
     assert "│" in output
+    # Colors ride on each group's first series tuple
+    colors = [series[0][1] for series, _ in widget.groups]
+    assert colors == ["red", "yellow"]
 
 def test_status_bar():
     """Test StatusBar widget rendering"""
     widget = StatusBar(interval=5, tab="1", error_count=2)
-    console = Console(file=StringIO(), width=80)
+    # Wide console so the single status line doesn't wrap and split tokens.
+    console = Console(file=StringIO(), width=200)
     with console.capture() as cap:
         console.print(widget)
     output = cap.get()
 
     # Check for interval
-    assert "Interval: 5s" in output
+    assert "5s" in output
     # Check for tab information
-    assert "1:Dashboard" in output
+    assert "1:Dash" in output
     # Check for error warning
     assert "⚠ 2 warning(s)" in output
     # Check for control hints
-    assert "+/-: Interval" in output
-    assert "[/]: Window" in output
-    assert "q: Quit" in output
+    assert "+/-:Int" in output
+    assert "[/]:Win" in output
+    assert "q:Quit" in output
 
 def test_status_bar_no_errors():
     """Test StatusBar with no errors"""
     widget = StatusBar(interval=10, tab="2", error_count=0)
-    console = Console(file=StringIO(), width=80)
+    console = Console(file=StringIO(), width=200)
     with console.capture() as cap:
         console.print(widget)
     output = cap.get()
@@ -134,5 +136,5 @@ def test_status_bar_no_errors():
     # Should not show error warning
     assert "⚠" not in output
     # Should show interval and tab
-    assert "Interval: 10s" in output
+    assert "10s" in output
     assert "2:Temp" in output

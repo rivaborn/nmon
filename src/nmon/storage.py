@@ -125,8 +125,17 @@ class Storage:
         def _f(v):
             return float(v) if v is not None else None
 
+        # The 24h max (row[0]) is guaranteed non-None past the guard above,
+        # but the 1h average (row[1]) can still be NULL: a GPU may have
+        # samples in the last 24h yet none within the last hour (the collector
+        # stalled, or resumed after a gap). Fall back to the 24h max so the two
+        # required core stats are always real floats and never crash the
+        # dashboard on float(None). Hotspot/junction stay optional via _f.
+        max_temp_24h = float(row[0])
+        avg_temp_1h = float(row[1]) if row[1] is not None else max_temp_24h
+
         return (
-            float(row[0]), float(row[1]),
+            max_temp_24h, avg_temp_1h,
             _f(row[2]), _f(row[3]),
             _f(row[4]), _f(row[5]),
         )

@@ -89,26 +89,41 @@ def test_get_current_stats_empty(in_memory_storage):
 def test_get_current_stats_24h_max(in_memory_storage, fake_sample):
     now = time.time()
     samples = [
-        fake_sample(timestamp=now - 86400, temp=60.0),  # 24 hours ago
+        fake_sample(timestamp=now - 82800, temp=60.0),  # 23 hours ago
         fake_sample(timestamp=now - 43200, temp=70.0),  # 12 hours ago
-        fake_sample(timestamp=now - 3600, temp=80.0),   # 1 hour ago
+        fake_sample(timestamp=now - 1800, temp=80.0),   # 30 minutes ago
     ]
     in_memory_storage.insert_samples(samples)
 
-    max_temp, avg_temp = in_memory_storage.get_current_stats(gpu_index=0)
+    max_temp, avg_temp, *_ = in_memory_storage.get_current_stats(gpu_index=0)
     assert max_temp == 80.0  # Should be the max from the last 24 hours
 
 def test_get_current_stats_1h_avg(in_memory_storage, fake_sample):
     now = time.time()
     samples = [
-        fake_sample(timestamp=now - 7200, temp=60.0),  # 2 hours ago
-        fake_sample(timestamp=now - 3600, temp=70.0),  # 1 hour ago
-        fake_sample(timestamp=now - 1800, temp=80.0),  # 30 minutes ago
+        fake_sample(timestamp=now - 7200, temp=60.0),  # 2 hours ago (outside 1h window)
+        fake_sample(timestamp=now - 3000, temp=70.0),  # 50 minutes ago (inside)
+        fake_sample(timestamp=now - 1800, temp=80.0),  # 30 minutes ago (inside)
     ]
     in_memory_storage.insert_samples(samples)
 
-    max_temp, avg_temp = in_memory_storage.get_current_stats(gpu_index=0)
+    max_temp, avg_temp, *_ = in_memory_storage.get_current_stats(gpu_index=0)
     assert abs(avg_temp - 75.0) < 0.01  # Should be avg of last hour (70 and 80)
+
+def test_get_current_stats_no_recent_samples(in_memory_storage, fake_sample):
+    # Samples exist within the 24h window but none within the last hour, so
+    # the 1h average is NULL. get_current_stats must still return real floats
+    # (the 1h avg falls back to the 24h max) rather than crashing on float(None).
+    now = time.time()
+    samples = [
+        fake_sample(timestamp=now - 7200, temp=60.0),  # 2 hours ago
+        fake_sample(timestamp=now - 5400, temp=80.0),  # 1.5 hours ago
+    ]
+    in_memory_storage.insert_samples(samples)
+
+    max_temp, avg_temp, *_ = in_memory_storage.get_current_stats(gpu_index=0)
+    assert max_temp == 80.0
+    assert avg_temp == 80.0  # no 1h data → falls back to the 24h max
 
 def test_get_history_ordered_by_time(in_memory_storage, fake_sample):
     now = time.time()
@@ -136,11 +151,12 @@ def test_get_history_respects_since(in_memory_storage, fake_sample):
     ]
     in_memory_storage.insert_samples(samples)
 
-    # Get history since 75 seconds ago (should only include the last sample)
+    # Get history since 30 seconds ago. Only the most recent sample (25s
+    # old) qualifies; the others are 50s and 100s old.
     history = in_memory_storage.get_history(
         gpu_index=0,
         metric="temperature_c",
-        since=now - 75
+        since=now - 30
     )
     assert len(history) == 1
     assert history[0]["timestamp"] == samples[2].timestamp

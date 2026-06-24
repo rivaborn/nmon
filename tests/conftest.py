@@ -1,9 +1,10 @@
 import pytest
 import time
-import sys
 from unittest.mock import MagicMock
 from nmon.models import GPUInfo, GPUSample
 from nmon.storage import Storage
+import nmon.gpu.nvml_source as _nvml_source
+import nmon.gpu.nvapi as _nvapi
 
 @pytest.fixture
 def in_memory_storage():
@@ -39,6 +40,16 @@ def fake_samples_batch(fake_gpu_info, fake_sample):
 
 @pytest.fixture
 def mock_pynvml(monkeypatch):
+    """Replace the pynvml reference used by NvmlSource with a mock.
+
+    nvml_source binds ``pynvml`` at import time, so patching sys.modules is
+    too late — we patch the module attribute directly. ``NVMLError`` must be
+    a real exception subclass so the ``except pynvml.NVMLError`` clauses
+    behave. ``read_thermal_channels`` is stubbed so ``sample_all()`` never
+    reaches out to real NVAPI hardware during unit tests.
+    """
     mock = MagicMock()
-    monkeypatch.setitem(sys.modules, "pynvml", mock)
+    mock.NVMLError = type("NVMLError", (Exception,), {})
+    monkeypatch.setattr(_nvml_source, "pynvml", mock)
+    monkeypatch.setattr(_nvapi, "read_thermal_channels", lambda index: {})
     return mock

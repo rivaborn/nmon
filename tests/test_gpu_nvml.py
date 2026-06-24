@@ -78,7 +78,7 @@ def test_sample_all_value_extraction(mock_pynvml, fake_gpu_info):
 def test_nvmlerror_wrapped_as_gpusourceerror(mock_pynvml):
     mock_pynvml.nvmlInit.return_value = None
     mock_pynvml.nvmlShutdown.return_value = None
-    mock_pynvml.nvmlDeviceGetCount.side_effect = Exception("NVMLError")
+    mock_pynvml.nvmlDeviceGetCount.side_effect = mock_pynvml.NVMLError("NVMLError")
     source = NvmlSource()
     with pytest.raises(GPUSourceError):
         source.sample_all()
@@ -86,14 +86,18 @@ def test_nvmlerror_wrapped_as_gpusourceerror(mock_pynvml):
 def test_close_calls_nvmlshutdown_once(mock_pynvml):
     mock_pynvml.nvmlInit.return_value = None
     mock_pynvml.nvmlShutdown.return_value = None
+    mock_pynvml.nvmlDeviceGetCount.return_value = 0
     source = NvmlSource()
+    source.sample_all()  # initialize NVML so close() has something to shut down
     source.close()
     assert mock_pynvml.nvmlShutdown.call_count == 1
 
 def test_close_is_idempotent(mock_pynvml):
     mock_pynvml.nvmlInit.return_value = None
     mock_pynvml.nvmlShutdown.return_value = None
+    mock_pynvml.nvmlDeviceGetCount.return_value = 0
     source = NvmlSource()
+    source.sample_all()  # initialize NVML
     source.close()
     source.close()
     assert mock_pynvml.nvmlShutdown.call_count == 1

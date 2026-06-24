@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from nmon.tui.history import build_history, METRIC_CONFIG, TIME_WINDOWS, GPU_COLORS
+from nmon.tui.history import (
+    build_history, format_time_window_tabs, METRIC_CONFIG, TIME_WINDOWS, GPU_COLORS,
+)
 from nmon.models import GPUInfo, HistoryRow
 from nmon.storage import Storage
 
@@ -80,8 +82,8 @@ def test_build_history_all_time_windows(mock_storage, gpu_list):
 
         panel = build_history(mock_storage, gpu_list, "temp", window)
 
-        # Check that the correct time window is highlighted
-        assert f"[{window}hr]" in panel.subtitle
+        # The active window is highlighted in parentheses, e.g. "(4hr)"
+        assert f"({window}hr)" in panel.subtitle
 
 def test_build_history_empty_data(mock_storage, gpu_list):
     # Test with empty data
@@ -94,16 +96,15 @@ def test_build_history_empty_data(mock_storage, gpu_list):
     assert METRIC_CONFIG["temp"]["label"] in panel.title
 
 def test_build_history_multiple_gpus(mock_storage, gpu_list):
-    # Test with multiple GPUs
-    mock_storage.get_history.side_effect = [
-        [HistoryRow(timestamp=1000.0, value=65.0)],
-        [HistoryRow(timestamp=1000.0, value=70.0)],
-    ]
+    # Test with multiple GPUs. For the temp metric build_history also queries
+    # the hotspot and junction columns per GPU, so assert on which GPU indices
+    # were queried rather than a raw call count.
+    mock_storage.get_history.return_value = [HistoryRow(timestamp=1000.0, value=65.0)]
 
-    panel = build_history(mock_storage, gpu_list, "temp", 1)
+    build_history(mock_storage, gpu_list, "temp", 1)
 
-    # Should be called for each GPU
-    assert mock_storage.get_history.call_count == len(gpu_list)
+    queried = {call.args[0] for call in mock_storage.get_history.call_args_list}
+    assert queried == {gpu.index for gpu in gpu_list}
 
 def test_build_history_color_assignment(mock_storage, gpu_list):
     # Test that colors are assigned correctly
@@ -121,14 +122,14 @@ def test_build_history_color_assignment(mock_storage, gpu_list):
         assert color in GPU_COLORS
 
 def test_format_time_window_tabs():
-    # Test the tab formatting function
+    # Test the tab formatting function (module-level, highlights with parens)
     for window in TIME_WINDOWS:
-        tabs = build_history.format_time_window_tabs(window)
-        assert f"[{window}hr]" in tabs
+        tabs = format_time_window_tabs(window)
+        assert f"({window}hr)" in tabs
         # Other windows should not be highlighted
         for other in TIME_WINDOWS:
             if other != window:
-                assert f"[{other}hr]" not in tabs
+                assert f"({other}hr)" not in tabs
                 assert f" {other}hr " in tabs
 
 def test_build_history_custom_dimensions(mock_storage, gpu_list):

@@ -14,26 +14,32 @@ def mock_gpu_source():
     ]
     source.list_gpus.return_value = gpus
 
-    # Create deterministic samples
-    samples = [
-        GPUSample(
-            gpu=gpus[0],
-            timestamp=1000.0,
-            temperature_c=70.0,
-            memory_used_mib=2048.0,
-            memory_total_mib=24564.0,
-            power_draw_w=120.0
-        ),
-        GPUSample(
-            gpu=gpus[1],
-            timestamp=1000.0,
-            temperature_c=65.0,
-            memory_used_mib=1024.0,
-            memory_total_mib=12288.0,
-            power_draw_w=90.0
-        )
-    ]
-    source.sample_all.return_value = samples
+    # Fresh samples stamped at call time. The collector prunes rows older than
+    # the retention window on every tick, so fixed historical timestamps (e.g.
+    # 1000.0) would be deleted the instant they're inserted. Real wall-clock
+    # timestamps also make successive samples sort in collection order.
+    def _sample_all():
+        ts = time.time()
+        return [
+            GPUSample(
+                gpu=gpus[0],
+                timestamp=ts,
+                temperature_c=70.0,
+                memory_used_mib=2048.0,
+                memory_total_mib=24564.0,
+                power_draw_w=120.0
+            ),
+            GPUSample(
+                gpu=gpus[1],
+                timestamp=ts,
+                temperature_c=65.0,
+                memory_used_mib=1024.0,
+                memory_total_mib=12288.0,
+                power_draw_w=90.0
+            )
+        ]
+
+    source.sample_all.side_effect = _sample_all
     return source
 
 @pytest.fixture
@@ -78,7 +84,7 @@ def test_sample_stored_and_retrievable(in_memory_storage, mock_gpu_source, test_
     assert history[0]["value"] == 70.0
     assert history[1]["value"] == 70.0
     assert history[2]["value"] == 70.0
-    assert history[0]["timestamp"] == 1000.0
+    assert history[0]["timestamp"] > time.time() - 60  # recent, not pruned
     assert history[1]["timestamp"] > history[0]["timestamp"]
     assert history[2]["timestamp"] > history[1]["timestamp"]
 
