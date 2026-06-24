@@ -103,7 +103,21 @@ class NmonApp:
             temp_threshold_c = self._temp_threshold_c
             show_temp_threshold = self._show_temp_threshold
 
+        # Staleness guard: if the collector hasn't refreshed an LLM sample
+        # in 2× the current sampling interval, treat it as missing rather
+        # than rendering frozen state. Without this, a poll thread that
+        # stops updating a specific sample (without crashing the GPU
+        # path) leaves a stale "model loaded" row on screen — observed
+        # with Ollama where the dashboard kept showing an unloaded model.
+        stale_after = max(5.0, 2.0 * self._collector._interval)
+        now_wall = time.time()
         ollama_sample = self._collector.get_latest_ollama()
+        if ollama_sample is not None and (now_wall - ollama_sample.timestamp) > stale_after:
+            ollama_sample = None
+        vllm_sample = self._collector.get_latest_vllm()
+        if vllm_sample is not None and (now_wall - vllm_sample.timestamp) > stale_after:
+            vllm_sample = None
+
         now_mono = time.monotonic()
         if ollama_sample is not None and ollama_sample.offloading:
             # Fresh banner session → reset peak before folding in this sample.
@@ -160,6 +174,7 @@ class NmonApp:
                         show_hotspot=show_hotspot,
                         show_junction=show_junction,
                         ollama=ollama_sample,
+                        vllm=vllm_sample,
                     )
                 )
             else:

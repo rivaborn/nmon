@@ -40,6 +40,16 @@ class HistoryRow(TypedDict):
     value: float
 
 @dataclass
+class VLLMSample:
+    """One point of vLLM server telemetry. Not persisted — vLLM keeps
+    its model pinned in VRAM for the lifetime of the process, so there
+    is nothing useful to chart over time."""
+    timestamp: float
+    running: bool
+    model_name: str | None
+
+
+@dataclass
 class OllamaSample:
     """One point of Ollama server telemetry, stored in ollama_samples."""
     timestamp: float
@@ -67,6 +77,8 @@ class AppConfig:
     default_show_temp_threshold: bool = True
     ollama_enabled: bool = True
     ollama_url: str = "http://localhost:11434"
+    vllm_enabled: bool = True
+    vllm_url: str = "http://localhost:8000"
 
 def sample_to_row(sample: GPUSample) -> dict:
     return {

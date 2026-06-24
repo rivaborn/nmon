@@ -2,7 +2,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 from rich.console import Group
-from nmon.models import GPUStats, OllamaSample
+from nmon.models import GPUStats, OllamaSample, VLLMSample
 from nmon.tui.widgets import MemoryBar
 
 def _temp_style(temp: float) -> str:
@@ -98,12 +98,32 @@ def build_ollama_table(sample: OllamaSample) -> Table:
     )
     return table
 
+def build_vllm_table(sample: VLLMSample) -> Table:
+    """vLLM Server section. Called from build_dashboard when a vLLM
+    server is detected. vLLM does not partially offload to CPU, so this
+    only surfaces the currently served model name."""
+    table = Table(
+        show_header=True, header_style="bold magenta", expand=True,
+        title="vLLM Server", title_style="bold magenta",
+    )
+    table.add_column("Model", no_wrap=True)
+    table.add_column("Status", justify="right")
+    if not sample.running:
+        table.add_row(Text("(no model loaded)", style="dim"), "—")
+        return table
+    table.add_row(
+        sample.model_name or "(unknown)",
+        Text("loaded", style="green"),
+    )
+    return table
+
 def build_dashboard(
     stats: list[GPUStats],
     width: int = 80,
     show_hotspot: bool = True,
     show_junction: bool = True,
     ollama: OllamaSample | None = None,
+    vllm: VLLMSample | None = None,
 ):
     if not stats:
         return Panel("No GPU data yet.", title="nmon")
@@ -149,6 +169,10 @@ def build_dashboard(
     if ollama is not None:
         sections.append(Text(""))
         sections.append(build_ollama_table(ollama))
+
+    if vllm is not None:
+        sections.append(Text(""))
+        sections.append(build_vllm_table(vllm))
 
     if len(sections) == 1:
         return table

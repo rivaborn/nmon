@@ -7,6 +7,7 @@ from nmon.gpu.smi_source import SmiSource
 from nmon.storage import Storage
 from nmon.collector import Collector
 from nmon.ollama import OllamaClient
+from nmon.vllm import VLLMClient
 from nmon.tui.app import NmonApp
 
 console = Console()
@@ -49,18 +50,37 @@ def main() -> None:
     storage = Storage(config.db_path)
 
     ollama_client: OllamaClient | None = None
+    ollama_reachable = True
     if config.ollama_enabled:
-        probe = OllamaClient(config.ollama_url)
-        if probe.ping():
+        ollama_client = OllamaClient(config.ollama_url)
+        ollama_reachable = ollama_client.ping()
+        if ollama_reachable:
             console.print(f"[green]Ollama detected at {config.ollama_url}[/green]")
-            ollama_client = probe
         else:
             console.print(
                 f"[dim]No Ollama server at {config.ollama_url} "
-                "(LLM tab and dashboard section disabled)[/dim]"
+                "(retrying every 60s)[/dim]"
             )
 
-    collector = Collector(source, storage, config, ollama=ollama_client)
+    vllm_client: VLLMClient | None = None
+    vllm_reachable = True
+    if config.vllm_enabled:
+        vllm_client = VLLMClient(config.vllm_url)
+        vllm_reachable = vllm_client.ping()
+        if vllm_reachable:
+            console.print(f"[green]vLLM detected at {config.vllm_url}[/green]")
+        else:
+            console.print(
+                f"[dim]No vLLM server at {config.vllm_url} "
+                "(retrying every 60s)[/dim]"
+            )
+
+    collector = Collector(
+        source, storage, config,
+        ollama=ollama_client, vllm=vllm_client,
+        ollama_reachable_at_start=ollama_reachable,
+        vllm_reachable_at_start=vllm_reachable,
+    )
     app = NmonApp(collector, storage, config)
     try:
         app.run()

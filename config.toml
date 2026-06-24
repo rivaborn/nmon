@@ -22,3 +22,18 @@ show_temp_threshold = true
 # interval for the currently loaded model and its GPU/CPU split.
 enabled = true
 url = "http://localhost:11434"
+
+[vllm]
+# Local vLLM runs in WSL2 on port 11436. WSL2 mirrored networking does NOT
+# bridge vLLM's uvicorn listener to the Windows host (the homelab wiki's
+# local-llm.md troubleshooting documents the symptom and the SO_REUSEPORT /
+# dual-stack v6 socket-option hypothesis). The workaround is a plain-bind
+# socat relay inside WSL on port 11437 forwarding to vLLM:
+#   systemd-run --user --unit=vllm-relay \
+#     socat TCP4-LISTEN:11437,fork,reuseaddr TCP4:192.168.1.126:11436
+# nmon talks to the relay (which mirrors cleanly), not vLLM directly.
+enabled = true
+# 127.0.0.1 (not localhost) — socat listens IPv4-only (TCP4-LISTEN). With
+# `localhost`, Python's happy-eyeballs tries ::1 first, sits 5 s on the empty
+# IPv6 port, then falls back to IPv4. The explicit v4 address skips that.
+url = "http://127.0.0.1:11437"

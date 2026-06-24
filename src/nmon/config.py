@@ -19,6 +19,10 @@ DEFAULTS = {
         "enabled": True,
         "url": "http://localhost:11434",
     },
+    "vllm": {
+        "enabled": True,
+        "url": "http://localhost:8000",
+    },
 }
 
 class ConfigError(ValueError): pass
@@ -55,7 +59,10 @@ def load_config(path: str | None = None) -> AppConfig:
             raw = tomllib.load(f)
     cfg = _apply_defaults(raw)
     _validate(cfg)
-    s, st, d, o = cfg["sampling"], cfg["storage"], cfg["display"], cfg["ollama"]
+    s, st, d, o, v = (
+        cfg["sampling"], cfg["storage"], cfg["display"],
+        cfg["ollama"], cfg["vllm"],
+    )
     return AppConfig(
         interval_seconds=s["interval_seconds"],
         min_interval=s["min_interval"],
@@ -68,4 +75,6 @@ def load_config(path: str | None = None) -> AppConfig:
         default_show_temp_threshold=bool(d["show_temp_threshold"]),
         ollama_enabled=bool(o["enabled"]),
         ollama_url=str(o["url"]),
+        vllm_enabled=bool(v["enabled"]),
+        vllm_url=str(v["url"]),
     )
