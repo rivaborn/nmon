@@ -9,7 +9,6 @@ requires-python = ">=3.10"
 dependencies = [
     "rich>=13.7",
     "pynvml>=11.5.0",
-    "readchar>=4.0.5",
     "tomli>=2.0.1; python_version < '3.11'",
 ]
 

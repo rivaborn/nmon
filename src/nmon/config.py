@@ -55,8 +55,13 @@ def load_config(path: str | None = None) -> AppConfig:
                 path = str(candidate)
                 break
     if path:
-        with open(path, "rb") as f:
-            raw = tomllib.load(f)
+        try:
+            with open(path, "rb") as f:
+                raw = tomllib.load(f)
+        except OSError as e:
+            raise ConfigError(f"could not read config file {path}: {e}") from e
+        except tomllib.TOMLDecodeError as e:
+            raise ConfigError(f"invalid TOML in {path}: {e}") from e
     cfg = _apply_defaults(raw)
     _validate(cfg)
     s, st, d, o, v = (

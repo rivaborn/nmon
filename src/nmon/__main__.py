@@ -37,7 +37,12 @@ def main() -> None:
         sys.exit(1)
 
     if args.interval is not None:
-        config.interval_seconds = args.interval
+        # Clamp the CLI override to the configured bounds. Without this, an
+        # unvalidated value like --interval 0 (or negative) makes the
+        # collector loop spin with no delay and peg a CPU core.
+        config.interval_seconds = max(
+            config.min_interval, min(config.max_interval, args.interval)
+        )
     if args.db is not None:
         config.db_path = args.db
 
@@ -85,9 +90,13 @@ def main() -> None:
     try:
         app.run()
     finally:
-        collector.stop()
-        storage.close()
-        source.close()
+        # Only release storage/NVML once the collector thread has actually
+        # stopped, so the background loop can never touch a closed connection
+        # or a shut-down NVML. A loop that didn't stop in time runs on a daemon
+        # thread the OS reclaims at process exit.
+        if collector.stop():
+            storage.close()
+            source.close()
 
 if __name__ == "__main__":
     main()

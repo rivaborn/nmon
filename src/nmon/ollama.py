@@ -21,6 +21,7 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 
 @dataclass
@@ -98,6 +99,8 @@ class OllamaClient:
 
     def _get(self, path: str) -> dict:
         url = self._base + path
+        if urlparse(url).scheme not in ("http", "https"):
+            raise ValueError(f"refusing non-http(s) URL: {url!r}")
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=self._timeout) as resp:
             data = resp.read()
