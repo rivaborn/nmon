@@ -26,6 +26,26 @@ class SmiSource(GPUSource):
             raise GPUSourceError(r.stderr)
         return r.stdout
 
+    @staticmethod
+    def _text(node, path: str) -> str | None:
+        el = node.find(path)
+        if el is None or el.text is None:
+            return None
+        return el.text.strip()
+
+    @classmethod
+    def _num(cls, node, path: str) -> float | None:
+        """Parse the leading number from a node like '72 C' / '120.00 W' /
+        '4096 MiB'. Returns None for a missing element or an 'N/A' value
+        (e.g. power_draw on a laptop dGPU without a power sensor)."""
+        t = cls._text(node, path)
+        if not t or t.upper().startswith("N/A"):
+            return None
+        try:
+            return float(t.split()[0])
+        except (ValueError, IndexError):
+            return None
+
     def _parse_xml(self, xml_text: str) -> list[GPUSample]:
         try:
             root = ET.fromstring(xml_text)
@@ -33,21 +53,42 @@ class SmiSource(GPUSource):
             raise GPUSourceError(f"XML parse error: {e}") from e
         ts = time.time()
         samples = []
-        for gpu in root.findall("gpu"):
-            index = int(gpu.find("minor_number").text)
-            uuid = gpu.find("uuid").text.strip()
-            name = gpu.find("product_name").text.strip()
-            temp = float(gpu.find("temperature/gpu_temp").text.split()[0])
-            mem_used = float(gpu.find("fb_memory_usage/used").text.split()[0])
-            mem_total = float(gpu.find("fb_memory_usage/total").text.split()[0])
-            power = float(gpu.find("power_readings/power_draw").text.split()[0])
+        # Index by enumeration order: <minor_number> is a Linux-only field
+        # (reported N/A on Windows), and enumeration order matches the NVML GPU
+        # indices, so it's the portable choice. Every field is parsed
+        # defensively so a missing/renamed/"N/A" element degrades to 0 rather
+        # than crashing the whole sample.
+        for index, gpu in enumerate(root.findall("gpu")):
+            uuid = self._text(gpu, "uuid") or f"GPU-{index}"
+            name = self._text(gpu, "product_name") or "Unknown GPU"
+            temp = self._num(gpu, "temperature/gpu_temp")
+            mem_used = self._num(gpu, "fb_memory_usage/used")
+            mem_total = self._num(gpu, "fb_memory_usage/total")
+            # Power element naming has churned across driver versions:
+            #   <power_readings><power_draw>                 (pre-535)
+            #   <gpu_power_readings><power_draw>             (535+)
+            #   <gpu_power_readings><instant_power_draw> /   (latest; <power_draw>
+            #                       <average_power_draw>      is deprecated)
+            # Try them in priority order; "N/A" entries are skipped by _num.
+            power = None
+            for _power_path in (
+                "gpu_power_readings/instant_power_draw",
+                "gpu_power_readings/average_power_draw",
+                "gpu_power_readings/power_draw",
+                "power_readings/instant_power_draw",
+                "power_readings/average_power_draw",
+                "power_readings/power_draw",
+            ):
+                power = self._num(gpu, _power_path)
+                if power is not None:
+                    break
             samples.append(GPUSample(
                 gpu=GPUInfo(index=index, uuid=uuid, name=name),
                 timestamp=ts,
-                temperature_c=temp,
-                memory_used_mib=mem_used,
-                memory_total_mib=mem_total,
-                power_draw_w=power,
+                temperature_c=temp if temp is not None else 0.0,
+                memory_used_mib=mem_used if mem_used is not None else 0.0,
+                memory_total_mib=mem_total if mem_total is not None else 0.0,
+                power_draw_w=power if power is not None else 0.0,
             ))
         return samples
 
@@ -55,6 +96,8 @@ class SmiSource(GPUSource):
         return [s.gpu for s in self.sample_all()]
 
     def sample_all(self) -> list[GPUSample]:
-        xml_text = self._run_smi(["--xml-format",
-            "--query-gpu=gpu_name,uuid,temperature.gpu,memory.used,memory.total,power.draw"])
+        # `-q -x` dumps full XML for every GPU. (--query-gpu is a separate,
+        # CSV-only mode that cannot be combined with XML output, which is why
+        # the previous --xml-format/--query-gpu combination did not work.)
+        xml_text = self._run_smi(["-q", "-x"])
         return self._parse_xml(xml_text)

@@ -1,20 +1,29 @@
+<?xml version="1.0" ?>
+<!DOCTYPE nvidia_smi_log SYSTEM "nvsmi_device_v12.dtd">
 <nvidia_smi_log>
-    <timestamp>2023-01-01 00:00:00</timestamp>
-    <driver_version>525.60.13</driver_version>
+    <timestamp>Wed Jun 24 12:00:00 2026</timestamp>
+    <driver_version>551.86</driver_version>
+    <cuda_version>12.4</cuda_version>
     <attached_gpus>1</attached_gpus>
     <gpu id="00000000:01:00.0">
-        <minor_number>0</minor_number>
-        <uuid>GPU-00000000-0000-0000-0000-000000000000</uuid>
         <product_name>NVIDIA GeForce RTX 4090</product_name>
+        <minor_number>N/A</minor_number>
+        <uuid>GPU-00000000-0000-0000-0000-000000000000</uuid>
         <temperature>
             <gpu_temp>72 C</gpu_temp>
+            <gpu_temp_max_threshold>90 C</gpu_temp_max_threshold>
         </temperature>
         <fb_memory_usage>
-            <used>4096 MiB</used>
             <total>24564 MiB</total>
+            <reserved>340 MiB</reserved>
+            <used>4096 MiB</used>
+            <free>20128 MiB</free>
         </fb_memory_usage>
-        <power_readings>
-            <power_draw>120.0 W</power_draw>
-        </power_readings>
+        <gpu_power_readings>
+            <power_state>Requested functionality has been deprecated</power_state>
+            <average_power_draw>118.50 W</average_power_draw>
+            <instant_power_draw>120.00 W</instant_power_draw>
+            <current_power_limit>450.00 W</current_power_limit>
+        </gpu_power_readings>
     </gpu>
 </nvidia_smi_log>
