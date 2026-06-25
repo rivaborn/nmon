@@ -124,11 +124,21 @@ def build_dashboard(
     show_junction: bool = True,
     ollama: OllamaSample | None = None,
     vllm: VLLMSample | None = None,
+    stale_age: float | None = None,
 ):
     if not stats:
         return Panel("No GPU data yet.", title="nmon")
+    # stale_age is set when the collector hasn't refreshed GPU samples within
+    # the staleness window — surface it loudly rather than showing frozen
+    # readings as if they were current.
+    if stale_age is not None:
+        gpu_title = f"GPU Status  ⚠ STALE — last update {stale_age:.0f}s ago"
+        gpu_title_style = "bold red"
+    else:
+        gpu_title = "GPU Status"
+        gpu_title_style = "bold"
     table = Table(show_header=True, header_style="bold cyan", expand=True,
-                  title="GPU Status", title_style="bold")
+                  title=gpu_title, title_style=gpu_title_style)
     table.add_column("GPU", no_wrap=True)
     table.add_column("Temp", justify="right")
     table.add_column("Max 24h", justify="right")

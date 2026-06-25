@@ -15,6 +15,7 @@ class MemoryBar:
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         frac = (self.used / self.total) if self.total > 0 else 0.0
+        frac = max(0.0, min(1.0, frac))  # guard used > total (overlong bar)
         filled = round(frac * self.width)
         bar = "█" * filled + "░" * (self.width - filled)
         pct = round(frac * 100)
@@ -162,7 +163,8 @@ class StatusBar:
     def __init__(self, interval: int, tab: str, error_count: int,
                  show_hotspot: bool = True, show_junction: bool = True,
                  temp_threshold_c: float | None = None,
-                 show_temp_threshold: bool = False):
+                 show_temp_threshold: bool = False,
+                 gpu_stale: bool = False):
         self.interval = interval
         self.tab = tab
         self.error_count = error_count
@@ -170,6 +172,7 @@ class StatusBar:
         self.show_junction = show_junction
         self.temp_threshold_c = temp_threshold_c
         self.show_temp_threshold = show_temp_threshold
+        self.gpu_stale = gpu_stale
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         t = Text()
@@ -196,4 +199,6 @@ class StatusBar:
         t.append("  q:Quit", style="dim")
         if self.error_count:
             t.append(f"  │  ⚠ {self.error_count} warning(s)", style="yellow")
+        if self.gpu_stale:
+            t.append("  │  ⚠ GPU DATA STALE", style="bold white on red")
         yield t

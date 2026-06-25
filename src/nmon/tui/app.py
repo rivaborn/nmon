@@ -1,4 +1,7 @@
-import msvcrt
+try:
+    import msvcrt
+except ImportError:  # non-Windows: the interactive TUI can't take keyboard
+    msvcrt = None    # input, but the module still imports for tests/portability.
 import time
 import threading
 import traceback
@@ -59,7 +62,9 @@ class NmonApp:
         self._offload_peak_pct: float = 0.0
 
     def _persist_state(self) -> None:
-        """Snapshot caller holds self._lock."""
+        """Write the runtime state (threshold value/visibility) to disk. Called
+        from the key thread without the lock held — only that thread mutates
+        these values, so the write needs no lock and can run off the hot path."""
         save_state(self._state_path, {
             "temp_threshold_c": self._temp_threshold_c,
             "show_temp_threshold": self._show_temp_threshold,
@@ -109,7 +114,7 @@ class NmonApp:
         # stops updating a specific sample (without crashing the GPU
         # path) leaves a stale "model loaded" row on screen — observed
         # with Ollama where the dashboard kept showing an unloaded model.
-        stale_after = max(5.0, 2.0 * self._collector._interval)
+        stale_after = max(5.0, 2.0 * self._collector.get_interval())
         now_wall = time.time()
         ollama_sample = self._collector.get_latest_ollama()
         if ollama_sample is not None and (now_wall - ollama_sample.timestamp) > stale_after:
@@ -118,19 +123,7 @@ class NmonApp:
         if vllm_sample is not None and (now_wall - vllm_sample.timestamp) > stale_after:
             vllm_sample = None
 
-        now_mono = time.monotonic()
-        if ollama_sample is not None and ollama_sample.offloading:
-            # Fresh banner session → reset peak before folding in this sample.
-            if now_mono >= self._offload_until:
-                self._offload_peak_pct = 0.0
-            self._offload_until = now_mono + OFFLOAD_BANNER_HOLD_SECONDS
-            self._offload_peak_pct = max(
-                self._offload_peak_pct,
-                100.0 - ollama_sample.gpu_pct,
-            )
-        show_banner = now_mono < self._offload_until
-        if not show_banner:
-            self._offload_peak_pct = 0.0
+        show_banner = self._update_offload_banner(ollama_sample)
 
         layout = Layout()
         if show_banner:
@@ -165,6 +158,12 @@ class NmonApp:
             Text.from_markup(f" nmon  {tabs_str}", style="bold")
         )
         samples = self._collector.get_latest()
+        # If the collector hasn't refreshed GPU samples within the staleness
+        # window (e.g. sampling has been failing), flag it so the dashboard and
+        # status bar don't present frozen readings as if they were live.
+        gpu_stale_age = None
+        if samples and (now_wall - samples[0].timestamp) > stale_after:
+            gpu_stale_age = now_wall - samples[0].timestamp
         if tab == "dashboard":
             if samples:
                 stats = self._build_gpu_stats(samples)
@@ -175,6 +174,7 @@ class NmonApp:
                         show_junction=show_junction,
                         ollama=ollama_sample,
                         vllm=vllm_sample,
+                        stale_age=gpu_stale_age,
                     )
                 )
             else:
@@ -194,19 +194,22 @@ class NmonApp:
                     show_temp_threshold=show_temp_threshold,
                 )
             )
-        interval = self._collector._interval
+        interval = self._collector.get_interval()
         layout["footer"].update(
             StatusBar(
-                interval, tab, len(self._collector.warnings),
+                interval, tab, self._collector.warning_count(),
                 show_hotspot=show_hotspot,
                 show_junction=show_junction,
                 temp_threshold_c=temp_threshold_c,
                 show_temp_threshold=show_temp_threshold,
+                gpu_stale=gpu_stale_age is not None,
             )
         )
         return layout
 
     def _handle_keys(self) -> None:
+        if msvcrt is None:
+            return  # keyboard input needs Windows; elsewhere the TUI is read-only
         from nmon.tui.history import TIME_WINDOWS
         while not self._quit:
             if not msvcrt.kbhit():
@@ -237,9 +240,9 @@ class NmonApp:
                     idx = TIME_WINDOWS.index(self._time_window)
                     self._time_window = TIME_WINDOWS[min(len(TIME_WINDOWS) - 1, idx + 1)]
                 elif key == '+':
-                    self._collector.set_interval(self._collector._interval + 1)
+                    self._collector.set_interval(self._collector.get_interval() + 1)
                 elif key == '-':
-                    self._collector.set_interval(self._collector._interval - 1)
+                    self._collector.set_interval(self._collector.get_interval() - 1)
                 elif key in ('h', 'H'):
                     self._show_hotspot = not self._show_hotspot
                 elif key in ('j', 'J'):
@@ -248,28 +251,27 @@ class NmonApp:
                     self._show_temp_threshold = not self._show_temp_threshold
                     persist = True
                 elif key == '\xe0H' and self._tab == "temp":   # up arrow
-                    self._temp_threshold_c = min(
-                        TEMP_THRESHOLD_MAX,
-                        round(self._temp_threshold_c + TEMP_THRESHOLD_STEP, 1),
-                    )
+                    self._nudge_threshold(1)
                     persist = True
                 elif key == '\xe0P' and self._tab == "temp":   # down arrow
-                    self._temp_threshold_c = max(
-                        TEMP_THRESHOLD_MIN,
-                        round(self._temp_threshold_c - TEMP_THRESHOLD_STEP, 1),
-                    )
+                    self._nudge_threshold(-1)
                     persist = True
                 else:
                     changed = False
-                if persist:
-                    self._persist_state()
+            # Persist outside the lock: only this thread mutates these values,
+            # so a slow disk write must not stall the render thread (which
+            # takes the same lock every frame).
+            if persist:
+                self._persist_state()
             if changed:
                 self._redraw.set()
 
     def _build_gpu_stats(self, samples) -> list[GPUStats]:
         stats = []
         for sample in samples:
-            result = self._storage.get_current_stats(sample.gpu.index)
+            # Read the aggregates the collector cached on its last tick rather
+            # than querying the DB on every render.
+            result = self._collector.get_latest_stats(sample.gpu.index)
             if result:
                 max_temp, avg_temp, hmax, havg, jmax, javg = result
             else:
@@ -287,3 +289,36 @@ class NmonApp:
                 junction_avg_1h=javg,
             ))
         return stats
+
+    def _update_offload_banner(self, ollama_sample) -> bool:
+        """Advance the GPU-offloading banner state machine for one frame and
+        return whether the banner should show. The banner is held for at least
+        OFFLOAD_BANNER_HOLD_SECONDS so it doesn't flicker at fast sample rates,
+        and the peak offload percentage seen during a hold window drives the
+        orange→red color (so a momentary lighter sample can't downgrade it).
+        Runs only on the render thread, so it needs no lock."""
+        now_mono = time.monotonic()
+        if ollama_sample is not None and ollama_sample.offloading:
+            # Fresh banner session → reset peak before folding in this sample.
+            if now_mono >= self._offload_until:
+                self._offload_peak_pct = 0.0
+            self._offload_until = now_mono + OFFLOAD_BANNER_HOLD_SECONDS
+            self._offload_peak_pct = max(
+                self._offload_peak_pct,
+                100.0 - ollama_sample.gpu_pct,
+            )
+        show_banner = now_mono < self._offload_until
+        if not show_banner:
+            self._offload_peak_pct = 0.0
+        return show_banner
+
+    def _nudge_threshold(self, steps: int) -> None:
+        """Move the temperature threshold by `steps` * step, clamped to the
+        valid range. Caller holds self._lock."""
+        self._temp_threshold_c = max(
+            TEMP_THRESHOLD_MIN,
+            min(
+                TEMP_THRESHOLD_MAX,
+                round(self._temp_threshold_c + steps * TEMP_THRESHOLD_STEP, 1),
+            ),
+        )
