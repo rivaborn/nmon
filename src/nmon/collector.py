@@ -3,7 +3,7 @@ import time
 import collections
 import logging
 from nmon.gpu.base import GPUSource, GPUSourceError
-from nmon.storage import Storage, StorageError
+from nmon.storage import Storage, StorageError, CurrentStats
 from nmon.models import GPUSample, AppConfig, OllamaSample, VLLMSample
 from nmon.ollama import OllamaClient
 from nmon.vllm import VLLMClient
@@ -34,6 +34,9 @@ class Collector:
         self._max = config.max_interval
         self._retention = config.retention_hours
         self._latest: list[GPUSample] | None = None
+        # Per-GPU dashboard aggregates, recomputed once per tick so the render
+        # loop reads them from memory instead of querying the DB every frame.
+        self._latest_stats: dict[int, CurrentStats | None] = {}
         self._ollama = ollama
         self._latest_ollama: OllamaSample | None = None
         self._vllm = vllm
@@ -59,14 +62,23 @@ class Collector:
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
+        """Signal the loop to exit and wait for the thread. Returns True if the
+        thread actually stopped, False if it's still running — so the caller
+        can avoid closing storage/NVML out from under a still-live loop."""
         self._stop.set()
         if self._thread:
-            self._thread.join(timeout=5)
+            self._thread.join(timeout=10)
+            return not self._thread.is_alive()
+        return True
 
     def get_latest(self) -> list[GPUSample] | None:
         with self._lock:
             return self._latest
+
+    def get_latest_stats(self, gpu_index: int) -> CurrentStats | None:
+        with self._lock:
+            return self._latest_stats.get(gpu_index)
 
     def get_latest_ollama(self) -> OllamaSample | None:
         with self._lock:
@@ -79,6 +91,14 @@ class Collector:
     def set_interval(self, seconds: int) -> None:
         with self._lock:
             self._interval = max(self._min, min(self._max, seconds))
+
+    def get_interval(self) -> int:
+        with self._lock:
+            return self._interval
+
+    def warning_count(self) -> int:
+        # deque append/len are atomic under the GIL, so no lock needed.
+        return len(self.warnings)
 
     def _loop(self) -> None:
         while not self._stop.is_set():
@@ -95,6 +115,14 @@ class Collector:
                     self._latest = samples
                 self._storage.insert_samples(samples)
                 self._storage.prune_old(self._retention)
+                # Compute dashboard aggregates once per tick (right after the
+                # write) so the render loop never runs these queries per frame.
+                stats = {
+                    s.gpu.index: self._storage.get_current_stats(s.gpu.index)
+                    for s in samples
+                }
+                with self._lock:
+                    self._latest_stats = stats
             except GPUSourceError as e:
                 log.warning("GPU source error: %s", e)
             except StorageError as e:

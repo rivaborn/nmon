@@ -27,8 +27,9 @@ def build_llm_history(
     height: int = 8,
 ) -> Panel:
     since = time.time() - time_window_hours * 3600
-    gpu_rows = storage.get_ollama_history("gpu_pct", since)
-    cpu_rows = storage.get_ollama_history("cpu_pct", since)
+    buckets = max(1, width - 10)
+    gpu_rows = storage.get_ollama_history("gpu_pct", since, buckets=buckets)
+    cpu_rows = storage.get_ollama_history("cpu_pct", since, buckets=buckets)
 
     all_timestamps: list[float] = []
     all_timestamps.extend(r["timestamp"] for r in gpu_rows)

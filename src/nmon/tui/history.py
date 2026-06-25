@@ -49,21 +49,24 @@ def build_history(
     all_timestamps: list[float] = []
     have_hotspot = False
     have_junction = False
+    # Bucket the window down to roughly the chart's column count in SQL so a
+    # 24h window doesn't pull tens of thousands of rows into Python per frame.
+    buckets = max(1, width - 10)
     for gpu in gpu_list:
-        rows = storage.get_history(gpu.index, cfg["column"], since)
+        rows = storage.get_history(gpu.index, cfg["column"], since, buckets=buckets)
         color = GPU_COLORS[gpu.index % len(GPU_COLORS)]
         series_list = [(rows, color)]
         all_timestamps.extend(r["timestamp"] for r in rows)
         if metric == "temp":
             if show_hotspot:
-                hrows = storage.get_history(gpu.index, "hotspot_temp_c", since)
+                hrows = storage.get_history(gpu.index, "hotspot_temp_c", since, buckets=buckets)
                 if hrows:
                     series_list.append((hrows, HOTSPOT_COLOR))
                     all_timestamps.extend(r["timestamp"] for r in hrows)
                     have_hotspot = True
             if show_junction:
                 jrows = storage.get_history(
-                    gpu.index, "memory_junction_temp_c", since
+                    gpu.index, "memory_junction_temp_c", since, buckets=buckets
                 )
                 if jrows:
                     series_list.append((jrows, JUNCTION_COLOR))

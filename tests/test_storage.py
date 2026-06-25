@@ -161,6 +161,32 @@ def test_get_history_respects_since(in_memory_storage, fake_sample):
     assert len(history) == 1
     assert history[0]["timestamp"] == samples[2].timestamp
 
+def test_get_history_bucketing_caps_rows_and_preserves_peak(in_memory_storage, fake_sample):
+    now = time.time()
+    # 100 samples across the last hour, temps 0..99.
+    samples = [
+        fake_sample(timestamp=now - 3600 + i * 36, temp=float(i))
+        for i in range(100)
+    ]
+    in_memory_storage.insert_samples(samples)
+
+    rows = in_memory_storage.get_history(0, "temperature_c", now - 3600, buckets=10)
+    assert len(rows) <= 10                       # bucketed down to ~10 rows
+    assert max(r["value"] for r in rows) == 99.0  # peak survives (MAX per bucket)
+    # timestamps come back in ascending order
+    assert [r["timestamp"] for r in rows] == sorted(r["timestamp"] for r in rows)
+
+
+def test_get_history_rejects_unknown_metric(in_memory_storage):
+    with pytest.raises(ValueError):
+        in_memory_storage.get_history(0, "temperature_c; DROP TABLE gpu_samples", since=0)
+
+
+def test_get_ollama_history_rejects_unknown_metric(in_memory_storage):
+    with pytest.raises(ValueError):
+        in_memory_storage.get_ollama_history("gpu_pct = 1 --", since=0)
+
+
 def test_concurrent_read_write(in_memory_storage, fake_sample):
     import threading
 

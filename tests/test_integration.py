@@ -126,6 +126,23 @@ def test_pruning_removes_old_data(in_memory_storage, mock_gpu_source, test_confi
     assert len(all_history) == 3
     assert all(h["timestamp"] > time.time() - 3600 for h in all_history)
 
+def test_collector_caches_current_stats(in_memory_storage, mock_gpu_source, test_config):
+    # The collector should compute and cache get_current_stats each tick so the
+    # render loop never queries the DB for aggregates.
+    collector = Collector(mock_gpu_source, in_memory_storage, test_config)
+    collector.start()
+    try:
+        deadline = time.time() + 5
+        while time.time() < deadline and collector.get_latest_stats(0) is None:
+            time.sleep(0.05)
+    finally:
+        collector.stop()
+
+    stats = collector.get_latest_stats(0)
+    assert stats is not None
+    assert stats.max_temp_24h == 70.0  # GPU 0's fixture temperature
+
+
 def test_multi_gpu_isolation(in_memory_storage, mock_gpu_source, test_config):
     # Run collector for 3 cycles
     call_count = {"count": 0}
