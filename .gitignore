@@ -6,6 +6,10 @@ nmon.db
 nmon.db-*
 nmon_debug.log
 
+# Local, machine-specific config (ship config.example.toml instead)
+/config.toml
+.nmon_state.json
+
 # Python
 __pycache__/
 *.py[cod]

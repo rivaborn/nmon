@@ -1,0 +1,29 @@
+# Example nmon configuration. Copy to `config.toml` (in the directory you run
+# nmon from) and edit. Missing keys/sections fall through to the built-in
+# defaults, so a partial file is fine. nmon looks for, in order:
+#   1. the path passed to --config
+#   2. ./config.toml
+#   3. ~/.nmon/config.toml
+
+[sampling]
+interval_seconds = 2          # how often to sample
+min_interval     = 1          # lower bound for the +/- keybindings
+max_interval     = 60         # upper bound
+
+[storage]
+db_path         = "nmon.db"   # SQLite database location
+retention_hours = 24          # rows older than this are pruned each tick
+
+[display]
+default_tab               = "dashboard"   # dashboard | temp | power | memory | llm
+default_time_window_hours = 1             # 1 | 4 | 12 | 24
+temp_threshold_c          = 95.0          # first-run threshold-line value
+show_temp_threshold       = true          # first-run threshold-line visibility
+
+[ollama]
+enabled = true
+url     = "http://localhost:11434"
+
+[vllm]
+enabled = true
+url     = "http://localhost:8000"

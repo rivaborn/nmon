@@ -57,8 +57,9 @@ for now.
 - Optional: a local Ollama server on `http://localhost:11434`.
 - Optional: a local vLLM server on `http://localhost:8000`.
 
-Dependencies declared in `pyproject.toml`: `rich`, `pynvml`, `readchar`,
-plus `tomli` on Python 3.10.
+Dependencies declared in `pyproject.toml`: `rich`, `pynvml`, plus
+`tomli` on Python 3.10. (Keyboard input uses the stdlib `msvcrt`, which
+is why the interactive TUI is Windows-only.)
 
 ---
 
@@ -155,7 +156,9 @@ window expires.
 
 ## Configuration
 
-nmon looks for `config.toml` in this order:
+An annotated template ships as `config.example.toml`; copy it to
+`config.toml` (which is gitignored, so machine-specific settings stay
+local) and edit. nmon looks for `config.toml` in this order:
 
 1. The path passed via `--config <path>`.
 2. `./config.toml` in the current working directory.
@@ -214,10 +217,12 @@ nmon picks the first available source at startup:
    Provides core temperature, VRAM usage, and power draw on every
    supported GPU. Also queries `NVML_FI_DEV_MEMORY_TEMP` for the
    memory junction sensor on data-center cards.
-2. **`nvidia-smi`** (fallback). Shells out to the binary with
-   `--xml-format`. Provides the same four core metrics. No NVAPI
-   integration on this path, so hotspot and junction temps are
-   unavailable.
+2. **`nvidia-smi`** (fallback). Shells out to `nvidia-smi -q -x` and
+   parses the XML, indexing GPUs by enumeration order (the Linux-only
+   `minor_number` field is `N/A` on Windows). Provides the same four
+   core metrics; tolerates the `power_readings`→`gpu_power_readings`
+   element rename and `N/A` values. No NVAPI integration on this path,
+   so hotspot and junction temps are unavailable.
 
 ### NVAPI for hotspot and GDDR6X memory junction
 
